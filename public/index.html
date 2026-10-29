@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ビフォーアフター動画メーカー｜リール用・無料</title>
+<meta name="description" content="整体院・治療院向け。ビフォーアフターの画像・動画を、Instagramリールサイズ（9:16）に無料で編集できるツール。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🎬 <span id="brandName">BAメーカー</span><small>リール用ビフォーアフター</small></div>
+  <div class="topbar-right">
+    <span id="planBadge" class="badge free">無料プラン</span>
+    <button id="btnUpgrade" class="btn primary small">⭐ 有料プラン</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- プレビュー -->
+  <section class="preview-col">
+    <div class="preview-wrap">
+      <canvas id="preview" width="540" height="960"></canvas>
+    </div>
+    <div class="preview-controls">
+      <button id="btnRestart" class="btn small">⏮ 頭出し</button>
+      <button id="btnPlay" class="btn small">⏸ 停止</button>
+    </div>
+    <p class="hint">空いている枠をタップ（クリック）しても写真・動画を選べます。</p>
+  </section>
+
+  <!-- 操作パネル -->
+  <section class="controls-col">
+
+    <div class="card">
+      <h2><span class="step">1</span> 写真・動画を選ぶ</h2>
+      <div class="two">
+        <input type="file" accept="image/*,video/*" id="fileBefore" hidden>
+        <input type="file" accept="image/*,video/*" id="fileAfter" hidden>
+        <button class="pick" data-pick="before"><span class="tag before">BEFORE</span><b>左：施術前</b><small id="nameBefore">タップして選ぶ</small></button>
+        <button class="pick" data-pick="after"><span class="tag after">AFTER</span><b>右：施術後</b><small id="nameAfter">タップして選ぶ</small></button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">2</span> 文字を入れる</h2>
+      <label>症状<input id="inSymptom" type="text" maxlength="30" placeholder="例：腰痛・坐骨神経痛"></label>
+      <label>年齢・属性<input id="inAge" type="text" maxlength="20" placeholder="例：40代 女性"></label>
+      <label>院名<input id="inClinic" type="text" maxlength="30" placeholder="例：整体院 導"></label>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">3</span> 保存する</h2>
+      <button id="btnSave" class="btn primary big">💾 保存する</button>
+      <div class="progress" id="progressBox" hidden><div id="progressBar"></div></div>
+      <p id="msg" class="msg"></p>
+      <p class="hint">動画があれば動画（MP4）、写真だけなら画像（PNG）で保存されます。</p>
+    </div>
+
+    <details class="card adv">
+      <summary>⚙ 詳細設定（必要な時だけ）</summary>
+
+      <label>補足の一文<input id="inSub" type="text" maxlength="40" placeholder="例：施術3回後の変化"></label>
+
+      <h3>デザイン</h3>
+      <div class="themes" id="themes"></div>
+      <div id="customBox" class="custom-box">
+        <label>背景<input type="color" id="cBg" value="#111111"></label>
+        <label>文字<input type="color" id="cText" value="#ffffff"></label>
+        <label>アクセント<input type="color" id="cAccent" value="#ff5a5f"></label>
+      </div>
+      <div class="logo-row">
+        <button id="btnLogo" class="btn small">🔒 ロゴを追加（有料）</button>
+        <input type="file" accept="image/*" id="fileLogo" hidden>
+        <button id="btnLogoClear" class="btn tiny" hidden>ロゴ削除</button>
+      </div>
+
+      <h3>写真・動画の調整</h3>
+      <p class="hint">ドラッグ＝位置調整 ／ ホイール・ピンチ＝拡大縮小</p>
+      <div class="two">
+        <div class="slot">
+          <h3><span class="tag before">BEFORE</span></h3>
+          <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomBefore"></label>
+          <button class="btn tiny" data-reset="before">位置リセット</button>
+          <button class="btn tiny" data-clear="before">削除</button>
+        </div>
+        <div class="slot">
+          <h3><span class="tag after">AFTER</span></h3>
+          <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomAfter"></label>
+          <button class="btn tiny" data-reset="after">位置リセット</button>
+          <button class="btn tiny" data-clear="after">削除</button>
+        </div>
+      </div>
+      <button id="btnSwap" class="btn tiny">⇄ 左右を入れ替え</button>
+
+      <h3>書き出し</h3>
+      <label>画質
+        <select id="selQuality">
+          <option value="720">720×1280（無料）</option>
+          <option value="1080" id="optHQ">1080×1920（有料）</option>
+        </select>
+      </label>
+      <label>音声
+        <select id="selAudio">
+          <option value="none">なし</option>
+          <option value="before">ビフォー動画の音声</option>
+          <option value="after">アフター動画の音声</option>
+        </select>
+      </label>
+      <button id="btnPng" class="btn small">🖼 画像（PNG）で保存</button>
+      <label class="check"><input type="checkbox" id="chkGuide"> Instagramで隠れやすい範囲を表示</label>
+      <p class="hint" id="limitHint"></p>
+    </details>
+    <p class="foot">動画・画像は<strong>お使いの端末内だけで処理</strong>され、サーバーには送信されません。</p>
+  </section>
+</main>
+
+<!-- 有料プラン モーダル -->
+<div id="modal" class="modal" hidden>
+  <div class="modal-body">
+    <button id="modalClose" class="modal-x" aria-label="閉じる">×</button>
+    <h2>⭐ 有料プラン</h2>
+    <p class="price"><span id="priceLabel"></span><small id="priceNote"></small></p>
+    <table class="cmp">
+      <thead><tr><th></th><th>無料</th><th>有料</th></tr></thead>
+      <tbody>
+        <tr><td>リール用9:16レイアウト</td><td>○</td><td>○</td></tr>
+        <tr><td>画像・動画の左右比較</td><td>○</td><td>○</td></tr>
+        <tr><td>書き出し画質</td><td>720×1280</td><td>1080×1920</td></tr>
+        <tr><td>動画の長さ</td><td>30秒まで</td><td>90秒まで</td></tr>
+        <tr><td>透かし表示</td><td>あり</td><td>なし</td></tr>
+        <tr><td>カラーテーマ</td><td>2種</td><td>5種＋自由配色</td></tr>
+        <tr><td>院のロゴ挿入</td><td>—</td><td>○</td></tr>
+      </tbody>
+    </table>
+    <a id="btnBuy" class="btn primary block" target="_blank" rel="noopener">有料プランに申し込む</a>
+    <p id="buyNote" class="hint"></p>
+    <hr>
+    <label>ライセンスキーをお持ちの方
+      <div class="key-row">
+        <input id="inKey" type="text" placeholder="BAM-XXXX-XXXX-XXXX" autocomplete="off">
+        <button id="btnActivate" class="btn">有効化</button>
+      </div>
+    </label>
+    <p id="keyMsg" class="msg"></p>
+    <button id="btnDeactivate" class="btn tiny" hidden>この端末のライセンスを解除</button>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
