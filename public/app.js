@@ -126,6 +126,7 @@
   function saveSettings() {
     try {
       localStorage.setItem(LS_SETTINGS, JSON.stringify({
+        clinic: state.clinic,
         theme: state.preferredTheme || state.theme,
         custom: state.custom,
         textPos: state.textPos,
@@ -139,6 +140,9 @@
       const raw = localStorage.getItem(LS_SETTINGS);
       if (raw) {
         const d = JSON.parse(raw);
+        if (d && typeof d.clinic === "string") {
+          state.clinic = d.clinic.trim().slice(0, 30);
+        }
         if (d && d.custom) {
           if (isHex(d.custom.bg)) state.custom.bg = d.custom.bg;
           if (isHex(d.custom.text)) state.custom.text = d.custom.text;
@@ -170,6 +174,7 @@
         }
       }
     } catch (e) {}
+    $("inClinic").value = state.clinic;
     $("bgmVol").value = state.bgm.volume;
     $("selPhotoSec").value = String(state.bgm.photoSec);
     syncTextSliders();
@@ -825,7 +830,10 @@
   function bind() {
     $("brandName").textContent = CFG.BRAND;
     [["inSymptom", "symptom"], ["inAge", "age"], ["inClinic", "clinic"], ["inSub", "sub"]].forEach(([id, key]) =>
-      $(id).addEventListener("input", (e) => { state[key] = e.target.value.trim(); }));
+      $(id).addEventListener("input", (e) => {
+        state[key] = e.target.value.trim();
+        if (key === "clinic") saveSettings();
+      }));
 
     document.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => $("file" + cap(b.dataset.pick)).click());
     ["before", "after"].forEach(w => {
