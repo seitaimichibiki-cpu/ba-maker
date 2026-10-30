@@ -464,6 +464,29 @@ async function checkAndBindDevice(env, record, deviceId, deviceLabel) {
   };
 }
 
+// ---------- 同一Stripeアカウント内の他サービス（ショクキュア・Logiction・シセビズ等）との混線防止 ----------
+function isBaMakerCheckoutSession(env, sess) {
+  if (!sess || typeof sess !== "object") return false;
+  const expectedLink = String(env.STRIPE_PAYMENT_LINK_ID || "").trim();
+  if (expectedLink) {
+    if (sess.payment_link === expectedLink) return true;
+    if (sess.metadata && sess.metadata.app === "ba-maker") return true;
+    return false;
+  }
+  if (sess.metadata && sess.metadata.app) {
+    return sess.metadata.app === "ba-maker";
+  }
+  const successUrl = String(sess.success_url || "").trim();
+  if (successUrl) {
+    const appBase = String(env.APP_URL || "https://seitaimichibiki-cpu.github.io/ba-maker/").replace(/\/+$/, "");
+    return successUrl.includes("/ba-maker") || Boolean(appBase && successUrl.startsWith(appBase));
+  }
+  if (typeof sess.amount_total === "number" && sess.amount_total > 0 && sess.amount_total !== 480) {
+    return false;
+  }
+  return true;
+}
+
 // ---------- Stripeステータス反映 ----------
 function mapStripeSubStatus(stripeStatus) {
   if (stripeStatus === "active" || stripeStatus === "trialing") {
@@ -507,6 +530,9 @@ export default {
       const obj = (event.data && event.data.object) || {};
 
       if (type === "checkout.session.completed") {
+        if (!isBaMakerCheckoutSession(env, obj)) {
+          return jsonResp({ ok: true, ignored: "other_product_checkout" }, 200, env, request);
+        }
         const email = (obj.customer_details && obj.customer_details.email) || obj.customer_email || "";
         const record = await issueOrGetLicense(env, {
           sessionId: obj.id,
@@ -636,7 +662,7 @@ export default {
         });
         if (sResp.ok) {
           const sess = await sResp.json();
-          if (sess && (sess.payment_status === "paid" || sess.status === "complete")) {
+          if (sess && isBaMakerCheckoutSession(env, sess) && (sess.payment_status === "paid" || sess.status === "complete")) {
             const email = (sess.customer_details && sess.customer_details.email) || sess.customer_email || "";
             record = await issueOrGetLicense(env, {
               sessionId: sess.id,

@@ -15,15 +15,13 @@ window.BAM_CONFIG = {
   // 1. Stripe Payment Link（購入ページ）のURL
   //    Stripe側の「支払い完了後のリダイレクト先」に以下を設定すると決済直後にその場で自動有効化されます：
   //    https://seitaimichibiki-cpu.github.io/ba-maker/?session_id={CHECKOUT_SESSION_ID}
-  //    例: "https://buy.stripe.com/xxxxxxxx"
-  PAYMENT_URL: "",
+  PAYMENT_URL: "https://buy.stripe.com/8x2cN56as5sq3EG6VwfQI09",
 
   // 2. ライセンス自動認証・2台制限・解約自動遮断サーバー（Cloudflare Worker）のURL
   LICENSE_API_URL: "https://ba-maker-license.seitaimichibiki.workers.dev",
 
   // 3. Stripe カスタマーポータル（契約管理・解約手続きページ）のURL（※ヘルプページの多段階解約フロー最終ステップで使用）
-  //    例: "https://billing.stripe.com/p/login/xxxxxxxx"
-  CUSTOMER_PORTAL_URL: "",
+  CUSTOMER_PORTAL_URL: "https://billing.stripe.com/p/login/6oUbJ11Ucf30fnodjUfQI00",
 
   // 4. お問い合わせ窓口（公式LINEのみ・BtoB用アカウント）
   LINE_CONTACT_URL: "https://lin.ee/XB6R3kS",
