@@ -1,15 +1,17 @@
 /**
- * BAメーカー 動き始め（歩き始め）自動検出エンジン
- * 動画冒頭を軽量スキャンし、手ブレや明るさ変化を除外して人物が動き出す瞬間（秒）を検出します。
+ * BAメーカー 動き始め（歩き始め）自動検出エンジン（高速・省デコーダ版）
+ * 既存の <video> 要素を再利用して粗スキャン（0.25秒刻み＋早期終了）＋局所精密スキャンを行い、
+ * iPadのハードウェアデコーダ負荷を最小限に抑えながら歩き始めの瞬間（0.1秒単位）を特定します。
  */
 (() => {
   "use strict";
 
-  const GW = 48, GH = 84;          // 解析用キャンバス解像度（9:16）
-  const BX = 6, BY = 7;            // 6×7 = 42ブロック分割
+  const GW = 48, GH = 84;           // 解析用キャンバス解像度（9:16）
+  const BX = 6, BY = 7;             // 6×7 = 42ブロック分割
   const BW = GW / BX, BH = GH / BY; // 1ブロック 8×12 px
-  const STEP_SEC = 0.1;            // 0.1秒刻み
-  const MAX_SCAN_SEC = 8.0;        // 冒頭最大8秒までスキャン
+  const COARSE_STEP = 0.25;         // 粗スキャン間隔（秒）
+  const MAX_SCAN_SEC = 6.5;         // 冒頭最大スキャン秒数
+  const PREROLL_SEC = 0.15;         // 一歩目の予備動作を残す秒数
 
   // 外周（背景・手ブレ計測）と中央（人物動作）のブロックインデックスを事前計算
   const OUTER_BLOCKS = [];
@@ -22,59 +24,55 @@
     }
   }
 
-  /**
-   * 輝度フレーム列から動き始めの開始秒数（trimStart）を算出する純粋関数
-   * @param {Float32Array[]} frames 各フレームの輝度配列 (長さ GW*GH)
-   * @param {number[]} times 各フレームの秒数
-   * @returns {number} 推奨開始秒数（0.1秒単位）
-   */
-  function analyzeFrames(frames, times) {
-    const M = frames.length;
-    if (M < 8) return 0;
+  function normalizeFrame(raw) {
+    let sum = 0;
+    for (let i = 0; i < raw.length; i++) sum += raw[i];
+    const mean = sum / raw.length;
+    const out = new Float32Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw[i] - mean;
+    return out;
+  }
 
-    // 1. オート露出（全体輝度変化）をキャンセルするため各フレームの平均輝度を差し引く
-    const norm = frames.map((raw) => {
-      let sum = 0;
-      for (let i = 0; i < raw.length; i++) sum += raw[i];
-      const mean = sum / raw.length;
-      const out = new Float32Array(raw.length);
-      for (let i = 0; i < raw.length; i++) out[i] = raw[i] - mean;
-      return out;
-    });
+  const bDiffScratch = new Float32Array(BX * BY);
 
-    // 2. 隣接フレーム間のブロック別差分を計算し、外周手ブレフロアを差し引いた中央動作スコアを求める
-    const rawScore = new Float32Array(M);
-    const bDiff = new Float32Array(BX * BY);
-
-    for (let f = 1; f < M; f++) {
-      const prev = norm[f - 1], cur = norm[f];
-      bDiff.fill(0);
-      for (let y = 0; y < GH; y++) {
-        const by = Math.min(BY - 1, (y / BH) | 0);
-        const rowOff = y * GW;
-        for (let x = 0; x < GW; x++) {
-          const bx = Math.min(BX - 1, (x / BW) | 0);
-          bDiff[by * BX + bx] += Math.abs(cur[rowOff + x] - prev[rowOff + x]);
-        }
+  function pairMotionScore(prevNorm, curNorm, timeSec) {
+    bDiffScratch.fill(0);
+    for (let y = 0; y < GH; y++) {
+      const by = Math.min(BY - 1, (y / BH) | 0);
+      const rowOff = y * GW;
+      for (let x = 0; x < GW; x++) {
+        const bx = Math.min(BX - 1, (x / BW) | 0);
+        bDiffScratch[by * BX + bx] += Math.abs(curNorm[rowOff + x] - prevNorm[rowOff + x]);
       }
-      const pixPerBlock = BW * BH;
-      const outer = OUTER_BLOCKS.map(i => bDiff[i] / pixPerBlock).sort((a, b) => a - b);
-      const inner = INNER_BLOCKS.map(i => bDiff[i] / pixPerBlock).sort((a, b) => b - a);
+    }
+    const pixPerBlock = BW * BH;
+    const outer = OUTER_BLOCKS.map(i => bDiffScratch[i] / pixPerBlock).sort((a, b) => a - b);
+    const inner = INNER_BLOCKS.map(i => bDiffScratch[i] / pixPerBlock).sort((a, b) => b - a);
 
-      // 外周の中央値＝手ブレ・背景ノイズ量
-      const bgFloor = outer[(outer.length / 2) | 0] || 0;
-      // 中央の上位25%（6ブロック）平均＝身体・脚の動き量
-      const topN = Math.max(1, (inner.length * 0.25) | 0);
-      let fgSum = 0;
-      for (let i = 0; i < topN; i++) fgSum += inner[i];
-      const fgPeak = fgSum / topN;
+    const bgFloor = outer[(outer.length / 2) | 0] || 0;
+    const topN = Math.max(1, (inner.length * 0.25) | 0);
+    let fgSum = 0;
+    for (let i = 0; i < topN; i++) fgSum += inner[i];
+    const fgPeak = fgSum / topN;
 
-      let sc = Math.max(0, fgPeak - bgFloor * 1.15);
-      if (times[f] <= 0.15) sc *= 0.5; // 録画開始直後のカメラ安定待ち
-      rawScore[f] = sc;
+    let sc = Math.max(0, fgPeak - bgFloor * 1.15);
+    if (timeSec <= 0.16) sc *= 0.5;
+    return sc;
+  }
+
+  /**
+   * 輝度フレーム列から動き始めの詳細情報を算出する純粋関数
+   */
+  function analyzeDetail(frames, times, preNormalized) {
+    const M = frames.length;
+    if (M < 6) return { trimStart: 0, onsetIdx: -1, base: 0, peak: 0, th: 0, norm: [] };
+
+    const norm = preNormalized ? frames : frames.map(normalizeFrame);
+    const rawScore = new Float32Array(M);
+    for (let f = 1; f < M; f++) {
+      rawScore[f] = pairMotionScore(norm[f - 1], norm[f], times[f]);
     }
 
-    // 3. 3点重み付き平滑化
     const smooth = new Float32Array(M);
     for (let f = 1; f < M; f++) {
       const prev = f > 1 ? rawScore[f - 1] : rawScore[f];
@@ -82,44 +80,63 @@
       smooth[f] = prev * 0.25 + rawScore[f] * 0.5 + next * 0.25;
     }
 
-    // 4. 静止ベースラインと動作ピークの統計判定
     const vals = Array.from(smooth.slice(1)).sort((a, b) => a - b);
     const base = vals[Math.floor(vals.length * 0.25)] || 0;
     const peak = vals[Math.floor(vals.length * 0.85)] || 0;
 
-    // 全体的にほぼ静止している動画は0秒
-    if (peak < 2.0 || (peak - base) < 1.5) return 0;
+    if (peak < 2.0 || (peak - base) < 1.5) {
+      return { trimStart: 0, onsetIdx: -1, base, peak, th: 0, norm };
+    }
+    if (base > peak * 0.55) {
+      return { trimStart: 0, onsetIdx: -1, base, peak, th: 0, norm };
+    }
 
-    // 最初からすでに歩いている動画（静止区間がない、または冒頭0.4秒がすでに高スコア）は0秒
-    if (base > peak * 0.55) return 0;
+    const step = times.length > 1 ? Math.max(0.05, times[1] - times[0]) : 0.1;
+    const earlyLim = Math.max(0.41, step * 2.05);
     let earlySum = 0, earlyCnt = 0;
-    for (let f = 1; f < M && times[f] <= 0.41; f++) {
+    for (let f = 1; f < M && times[f] <= earlyLim; f++) {
       earlySum += smooth[f];
       earlyCnt++;
     }
     const th = Math.max(1.8, base + (peak - base) * 0.26);
-    if (earlyCnt > 0 && (earlySum / earlyCnt) >= base + (peak - base) * 0.45) return 0;
+    if (earlyCnt > 0 && (earlySum / earlyCnt) >= base + (peak - base) * 0.45) {
+      return { trimStart: 0, onsetIdx: -1, base, peak, th, norm };
+    }
 
-    // 5. しきい値を超えて継続的に動き始めた最初の瞬間を特定
     for (let f = 1; f < M; f++) {
       if (smooth[f] >= th) {
         const s1 = f + 1 < M ? smooth[f + 1] : smooth[f];
         const s2 = f + 2 < M ? smooth[f + 2] : s1;
         if ((s1 + s2) / 2 >= th * 0.82) {
-          // 一歩目の予備動作が自然に見えるよう0.15秒手前を開始位置にする
-          const tStart = Math.max(0, Math.round((times[f] - 0.15) * 10) / 10);
-          return tStart < 0.2 ? 0 : tStart;
+          const tStart = Math.max(0, Math.round((times[f] - PREROLL_SEC) * 10) / 10);
+          return {
+            trimStart: tStart < 0.2 ? 0 : tStart,
+            onsetIdx: f,
+            base,
+            peak,
+            th,
+            norm
+          };
         }
       }
     }
-    return 0;
+    return { trimStart: 0, onsetIdx: -1, base, peak, th, norm };
   }
 
-  // iPadのハードウェアデコーダ競合を避けるためスキャンを直列実行するキュー
+  function analyzeFrames(frames, times) {
+    return analyzeDetail(frames, times, false).trimStart;
+  }
+
+  // スキャンを直列実行するキュー（デコーダ競合防止）
   let queue = Promise.resolve();
 
   function seekOnce(v, sec, timeoutMs) {
     return new Promise((resolve) => {
+      const target = Math.max(0, sec || 0);
+      if (Math.abs(v.currentTime - target) < 0.005 && !v.seeking && v.readyState >= 2) {
+        resolve();
+        return;
+      }
       let done = false;
       const finish = () => {
         if (done) return;
@@ -127,24 +144,39 @@
         v.removeEventListener("seeked", finish);
         resolve();
       };
-      if (Math.abs(v.currentTime - sec) < 0.005 && !v.seeking && v.readyState >= 2) {
-        resolve();
-        return;
-      }
       v.addEventListener("seeked", finish);
-      try { v.currentTime = sec; } catch (e) { finish(); return; }
-      setTimeout(finish, timeoutMs || 350);
+      try { v.currentTime = target; } catch (e) { finish(); return; }
+      setTimeout(finish, timeoutMs || 260);
     });
   }
 
-  function runScan(url, knownDuration, isCancelled) {
+  function grabNormalizedLuma(ctx, v) {
+    ctx.drawImage(v, 0, 0, GW, GH);
+    const img = ctx.getImageData(0, 0, GW, GH).data;
+    const luma = new Float32Array(GW * GH);
+    let totalLuma = 0;
+    for (let i = 0, p = 0; i < img.length; i += 4, p++) {
+      const y = img[i] * 0.299 + img[i + 1] * 0.587 + img[i + 2] * 0.114;
+      luma[p] = y;
+      totalLuma += y;
+    }
+    if (totalLuma <= GW * GH * 1.5) return null;
+    return normalizeFrame(luma);
+  }
+
+  function runScan(videoOrUrl, knownDuration, isCancelled) {
     return new Promise((resolve) => {
-      const v = document.createElement("video");
-      v.muted = true;
-      v.playsInline = true;
-      v.preload = "auto";
-      v.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
-      document.body.appendChild(v);
+      const reuseVideo = !!(videoOrUrl && typeof videoOrUrl === "object" && videoOrUrl.tagName === "VIDEO");
+      const v = reuseVideo ? videoOrUrl : document.createElement("video");
+      if (!reuseVideo) {
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = "auto";
+        v.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0.001;pointer-events:none";
+        document.body.appendChild(v);
+      } else {
+        try { v.pause(); } catch (e) {}
+      }
 
       const cv = document.createElement("canvas");
       cv.width = GW;
@@ -155,52 +187,91 @@
       const cleanup = (result) => {
         if (cleaned) return;
         cleaned = true;
-        try {
-          v.pause();
-          v.removeAttribute("src");
-          v.load();
-          v.remove();
-        } catch (e) {}
+        if (!reuseVideo) {
+          try {
+            v.pause();
+            v.removeAttribute("src");
+            v.load();
+            v.remove();
+          } catch (e) {}
+        }
         resolve(result || 0);
       };
 
-      const hardTimer = setTimeout(() => cleanup(0), 5000);
+      const hardTimer = setTimeout(() => cleanup(0), 3000);
 
-      v.onerror = () => { clearTimeout(hardTimer); cleanup(0); };
-      v.onloadeddata = async () => {
+      const executeScan = async () => {
         try {
           if (isCancelled && isCancelled()) { clearTimeout(hardTimer); cleanup(0); return; }
           const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : (knownDuration || 0);
           if (!isFinite(dur) || dur < 1.3) { clearTimeout(hardTimer); cleanup(0); return; }
 
-          // iPad Safariでデコーダを確実に起こす
-          try { await v.play(); v.pause(); } catch (e) {}
-
           const maxT = Math.min(MAX_SCAN_SEC, dur * 0.65);
-          const frames = [];
+          const normFrames = [];
           const times = [];
+          const pairScores = [];
 
-          for (let t = 0; t <= maxT + 0.001; t = Math.round((t + STEP_SEC) * 100) / 100) {
+          // 1. 0.25秒刻みの高速粗スキャン（明確な歩行開始後は早期終了してシーク回数を最小化）
+          for (let t = 0; t <= maxT + 0.001; t = Math.round((t + COARSE_STEP) * 100) / 100) {
             if (isCancelled && isCancelled()) { clearTimeout(hardTimer); cleanup(0); return; }
-            await seekOnce(v, t, 320);
-            ctx.drawImage(v, 0, 0, GW, GH);
-            const img = ctx.getImageData(0, 0, GW, GH).data;
-            const luma = new Float32Array(GW * GH);
-            let totalLuma = 0;
-            for (let i = 0, p = 0; i < img.length; i += 4, p++) {
-              const y = img[i] * 0.299 + img[i + 1] * 0.587 + img[i + 2] * 0.114;
-              luma[p] = y;
-              totalLuma += y;
+            await seekOnce(v, t, 240);
+            const nf = grabNormalizedLuma(ctx, v);
+            if (!nf) continue;
+            if (normFrames.length > 0) {
+              pairScores.push(pairMotionScore(normFrames[normFrames.length - 1], nf, t));
             }
-            // 未デコードの真っ黒フレームは除外
-            if (totalLuma > GW * GH * 1.5) {
-              frames.push(luma);
-              times.push(t);
+            normFrames.push(nf);
+            times.push(t);
+
+            // 早期終了判定：静止区間（低スコア3点以上）の後に高スコア歩行が4区間（1.0秒）連続したら以降のシークを省略
+            if (pairScores.length >= 8) {
+              let quietSum = 0, quietCnt = 0;
+              for (let i = 0; i < pairScores.length - 4; i++) {
+                if (pairScores[i] < 2.6) { quietSum += pairScores[i]; quietCnt++; }
+              }
+              if (quietCnt >= 3) {
+                const qAvg = quietSum / quietCnt;
+                const activeTh = Math.max(4.2, qAvg * 3.2);
+                const n = pairScores.length;
+                if (
+                  pairScores[n - 1] >= activeTh &&
+                  pairScores[n - 2] >= activeTh &&
+                  pairScores[n - 3] >= activeTh &&
+                  pairScores[n - 4] >= activeTh
+                ) {
+                  break;
+                }
+              }
             }
           }
 
+          const res = analyzeDetail(normFrames, times, true);
+          let detected = res.trimStart;
+
+          // 2. 粗スキャンで開始区間が見つかった場合のみ、直前0.3秒間を最大3回だけ精密チェック（0.1秒精度）
+          if (res.onsetIdx >= 1 && !(isCancelled && isCancelled())) {
+            const refIdx = Math.max(0, res.onsetIdx - 2);
+            const refNorm = normFrames[refIdx];
+            const tLow = times[Math.max(0, res.onsetIdx - 1)];
+            const tHigh = times[res.onsetIdx];
+            const fineTh = Math.max(1.8, res.base + (res.peak - res.base) * 0.24);
+            let refinedOnset = tHigh;
+
+            for (const frac of [0.33, 0.67]) {
+              if (isCancelled && isCancelled()) break;
+              const tf = Math.round((tLow + (tHigh - tLow) * frac) * 100) / 100;
+              await seekOnce(v, tf, 200);
+              const nf = grabNormalizedLuma(ctx, v);
+              if (nf && pairMotionScore(refNorm, nf, tf) >= fineTh) {
+                refinedOnset = tf;
+                break;
+              }
+            }
+            const tStart = Math.max(0, Math.round((refinedOnset - PREROLL_SEC) * 10) / 10);
+            detected = tStart < 0.2 ? 0 : tStart;
+          }
+
           clearTimeout(hardTimer);
-          const detected = analyzeFrames(frames, times);
           const safeTrim = Math.min(detected, Math.max(0, Math.round((dur - 0.6) * 10) / 10));
           cleanup(safeTrim);
         } catch (e) {
@@ -209,15 +280,21 @@
         }
       };
 
-      v.src = url;
+      if (reuseVideo && v.readyState >= 2) {
+        executeScan();
+      } else {
+        v.onerror = () => { clearTimeout(hardTimer); cleanup(0); };
+        v.onloadeddata = executeScan;
+        if (!reuseVideo) v.src = videoOrUrl;
+      }
     });
   }
 
-  function detectStart(url, knownDuration, isCancelled) {
-    const job = queue.then(() => runScan(url, knownDuration, isCancelled));
+  function detectStart(videoOrUrl, knownDuration, isCancelled) {
+    const job = queue.then(() => runScan(videoOrUrl, knownDuration, isCancelled));
     queue = job.catch(() => 0);
     return job;
   }
 
-  window.BAM_MOTION = { analyzeFrames, detectStart };
+  window.BAM_MOTION = { analyzeFrames, analyzeDetail, detectStart };
 })();

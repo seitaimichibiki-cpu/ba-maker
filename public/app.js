@@ -40,11 +40,18 @@
   const BGM = window.BAM_BGM;
   const MOTION = window.BAM_MOTION;
 
+  // iPad SafariでデコーダとVSyncを安定稼働させるためのオフスクリーン配置コンテナ
+  const mediaPool = document.createElement("div");
+  mediaPool.setAttribute("aria-hidden", "true");
+  mediaPool.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;overflow:hidden;opacity:0.001;pointer-events:none;z-index:-1";
+  document.body.appendChild(mediaPool);
+
   // ---------- 状態 ----------
   const newPanel = () => ({
     type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0,
     trimStart: 0, autoTrimSec: 0, autoDetected: false,
-    scanning: false, scanId: 0, scanPromise: null, audioSrc: null
+    scanning: false, scanId: 0, scanPromise: null, audioSrc: null,
+    holdCanvas: null, hasHold: false
   });
   const state = {
     symptom: "", age: "", clinic: "", sub: "",
@@ -60,6 +67,10 @@
   };
 
   let bgmPreview = null;
+  let loopTimer = null;
+  let scrubbingTrim = false;
+  let syncingVideos = false;
+  let syncToken = 0;
 
   function stopBgmPreview() {
     if (bgmPreview) {
@@ -325,7 +336,19 @@
       const { rx, ry } = panelRange(p, w, h);
       const dx = x + (w - dw) / 2 + p.ox * rx;
       const dy = y + (h - dh) / 2 + p.oy * ry;
-      ctx.drawImage(p.el, dx, dy, dw, dh);
+      const useHold = p.type === "video" && p.hasHold &&
+        !scrubbingTrim &&
+        (p.scanning || syncingVideos || p.el.seeking || p.el.readyState < 2);
+      ctx.drawImage(useHold ? p.holdCanvas : p.el, dx, dy, dw, dh);
+      if (placeholder && p.scanning) {
+        ctx.fillStyle = "rgba(0,0,0,0.58)";
+        rr(ctx, x + 36, y + h / 2 - 44, w - 72, 88, 22);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = `700 30px ${FONT}`;
+        ctx.fillText("🚶 動き始めを解析中…", x + w / 2, y + h / 2 + 2);
+      }
     } else {
       ctx.fillStyle = "rgba(128,128,128,0.18)";
       ctx.fillRect(x, y, w, h);
@@ -496,9 +519,7 @@
   }
 
   // ---------- プレビュー ----------
-  const pv = $("preview"), pctx = pv.getContext("2d");
-  let loopTimer = null;
-  let scrubbingTrim = false;
+  const pv = $("preview"), pctx = pv.getContext("2d", { alpha: false });
 
   function clearLoopTimer() {
     if (loopTimer) {
@@ -514,22 +535,71 @@
     return isFinite(d) && d > 0 && v.currentTime >= d - 0.04;
   }
   function tick() {
-    if (state.playing && !state.exporting && !scrubbingTrim && !loopTimer) {
-      const vids = videos();
-      if (vids.length > 0 && vids.every(isVideoAtEnd)) {
-        loopTimer = setTimeout(() => {
-          loopTimer = null;
-          if (state.playing && !state.exporting && !scrubbingTrim) restartVideos();
-        }, 350);
+    if (!state.exporting) {
+      if (state.playing && !scrubbingTrim && !syncingVideos && !loopTimer) {
+        const vids = videos();
+        if (vids.length > 0 && !vids.some(p => p.scanning) && vids.every(isVideoAtEnd)) {
+          loopTimer = setTimeout(() => {
+            loopTimer = null;
+            if (state.playing && !state.exporting && !scrubbingTrim) restartVideos();
+          }, 350);
+        }
       }
+      render(pctx, pv.width, pv.height, { preview: true, guide: state.guide });
     }
-    render(pctx, pv.width, pv.height, { preview: true, guide: state.guide });
     requestAnimationFrame(tick);
   }
 
-  // ---------- メディア読み込み・動き始め同期 ----------
+  // ---------- メディア読み込み・デコーダ管理・動き始め同期 ----------
   function setMsg(text, kind) { const m = $("msg"); m.textContent = text || ""; m.className = "msg " + (kind || ""); }
   function videos() { return Object.values(state.panels).filter(p => p.type === "video"); }
+  const nextFrame = () => new Promise((res) => requestAnimationFrame(res));
+
+  function captureHoldFrame(p) {
+    if (!p || p.type !== "video" || !p.el) return;
+    const vw = p.el.videoWidth, vh = p.el.videoHeight;
+    if (!vw || !vh || p.el.readyState < 2) return;
+    const scale = Math.min(1, 540 / vw);
+    const cw = Math.max(2, Math.round(vw * scale));
+    const ch = Math.max(2, Math.round(vh * scale));
+    if (!p.holdCanvas) p.holdCanvas = document.createElement("canvas");
+    if (p.holdCanvas.width !== cw || p.holdCanvas.height !== ch) {
+      p.holdCanvas.width = cw;
+      p.holdCanvas.height = ch;
+    }
+    try {
+      p.holdCanvas.getContext("2d").drawImage(p.el, 0, 0, cw, ch);
+      p.hasHold = true;
+    } catch (e) {}
+  }
+
+  function destroyPanelMedia(p) {
+    if (!p) return;
+    p.scanId++;
+    p.scanning = false;
+    p.scanPromise = null;
+    if (p.audioSrc) {
+      try { p.audioSrc.disconnect(); } catch (e) {}
+      p.audioSrc = null;
+    }
+    if (p.type === "video" && p.el) {
+      try {
+        p.el.onloadeddata = null;
+        p.el.onerror = null;
+        p.el.ondurationchange = null;
+        p.el.pause();
+        p.el.removeAttribute("src");
+        p.el.load(); // iPadのハードウェアデコーダ（VTDecompressionSession）を即時解放
+        p.el.remove();
+      } catch (e) {}
+    }
+    if (p.url) {
+      URL.revokeObjectURL(p.url);
+      p.url = null;
+    }
+    p.holdCanvas = null;
+    p.hasHold = false;
+  }
 
   function maxTrimFor(p) {
     if (!p || p.type !== "video" || !p.el) return 0;
@@ -581,18 +651,101 @@
     refreshTrimUI();
   }
 
+  function seekTo(v, sec) {
+    return new Promise((res) => {
+      const target = Math.max(0, sec || 0);
+      if (Math.abs(v.currentTime - target) < 0.005 && !v.seeking && v.readyState >= 2) {
+        res();
+        return;
+      }
+      let done = false;
+      const f = () => { if (!done) { done = true; v.removeEventListener("seeked", f); res(); } };
+      v.addEventListener("seeked", f);
+      try { v.currentTime = target; } catch (e) { f(); return; }
+      setTimeout(f, 600);
+    });
+  }
+
+  /**
+   * 非キーフレーム位置からの再生開始時のカクつきを防ぐため、
+   * わずかに手前へシーク→無音で1〜2フレームだけ実再生してデコーダの順方向バッファを温め、
+   * シークせずに一時停止（ホットポーズ状態）で待機させる
+   */
+  async function primeVideoForStart(p, targetSec, isCancelled) {
+    const v = p.el;
+    if (!v) return;
+    v.pause();
+    const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+    const lead = targetSec >= 0.085 ? 0.08 : 0;
+    const preSec = clamp(targetSec - lead, 0, dur > 0.15 ? dur - 0.12 : 0);
+
+    await seekTo(v, preSec);
+    if (isCancelled && isCancelled()) { v.pause(); return; }
+
+    const prevMuted = v.muted;
+    v.muted = true;
+    const startCt = v.currentTime;
+    const goalAdvance = dur > 0 && (dur - startCt) < 0.1 ? 0.02 : (lead > 0 ? 0.07 : 0.05);
+
+    await new Promise((resolve) => {
+      let settled = false;
+      let rafId = 0;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        if (rafId) cancelAnimationFrame(rafId);
+        try { v.pause(); } catch (e) {}
+        resolve();
+      };
+      const timer = setTimeout(done, 300);
+      const check = () => {
+        if (settled) return;
+        if ((isCancelled && isCancelled()) || v.ended || (v.currentTime - startCt) >= goalAdvance) {
+          clearTimeout(timer);
+          done();
+          return;
+        }
+        rafId = requestAnimationFrame(check);
+      };
+      const pPlay = v.play();
+      if (pPlay && typeof pPlay.then === "function") {
+        pPlay.then(() => {
+          if (!settled) rafId = requestAnimationFrame(check);
+        }).catch(() => {
+          clearTimeout(timer);
+          done();
+        });
+      } else {
+        rafId = requestAnimationFrame(check);
+      }
+    });
+
+    v.muted = prevMuted;
+  }
+
   function autoDetectPanel(which) {
     const p = state.panels[which];
-    if (!p || p.type !== "video" || !p.url || !MOTION) return Promise.resolve(0);
+    if (!p || p.type !== "video" || !p.el || !MOTION) return Promise.resolve(0);
     const token = ++p.scanId;
+    clearLoopTimer();
+    syncToken++;
+    syncingVideos = false;
+    // スキャン中は全動画を一時停止し、デコーダ帯域をスキャンに集中させる
+    videos().forEach(vp => {
+      if (!vp.scanning && vp.el && !vp.el.seeking) captureHoldFrame(vp);
+      if (vp.el) vp.el.pause();
+    });
     p.scanning = true;
     refreshPick();
+
     const job = MOTION.detectStart(
-      p.url,
-      p.el ? p.el.duration : 0,
+      p.el,
+      p.el.duration || 0,
       () => !Object.values(state.panels).includes(p) || p.scanId !== token
     ).then((sec) => {
       if (!Object.values(state.panels).includes(p) || p.scanId !== token) return 0;
+      // スキャン終了位置（途中フレーム）が一瞬描画されないよう同期ロックを先に立てる
+      syncingVideos = true;
       p.scanning = false;
       p.autoDetected = true;
       const clamped = clamp(Math.round((sec || 0) * 10) / 10, 0, maxTrimFor(p));
@@ -601,14 +754,22 @@
         p.trimStart = clamped;
       }
       refreshPick();
-      if (!state.exporting && !scrubbingTrim) {
+      if (!state.exporting && !scrubbingTrim && !videos().some(vp => vp.scanning)) {
         restartVideos();
+      } else if (!videos().some(vp => vp.scanning)) {
+        syncingVideos = false;
       }
       return clamped;
     }).catch(() => {
       if (Object.values(state.panels).includes(p) && p.scanId === token) {
+        syncingVideos = true;
         p.scanning = false;
         refreshPick();
+        if (!state.exporting && !scrubbingTrim && !videos().some(vp => vp.scanning)) {
+          restartVideos();
+        } else if (!videos().some(vp => vp.scanning)) {
+          syncingVideos = false;
+        }
       }
       return 0;
     });
@@ -624,28 +785,38 @@
     if (!isVideo && !isImage) { setMsg("画像または動画ファイルを選んでください。", "err"); return; }
     const url = URL.createObjectURL(file);
     const done = (el, type) => {
-      p.scanId++;
-      if (p.type === "video" && p.el) p.el.pause();
-      if (p.url) URL.revokeObjectURL(p.url);
+      destroyPanelMedia(p);
       Object.assign(p, {
         type, el, url, name: file.name, zoom: 1, ox: 0, oy: 0,
         trimStart: 0, autoTrimSec: 0, autoDetected: false,
-        scanning: false, scanPromise: null, audioSrc: null
+        scanning: false, scanPromise: null, audioSrc: null,
+        holdCanvas: null, hasHold: false
       });
+      if (type === "video") captureHoldFrame(p);
       $("zoom" + cap(which)).value = 1;
       refreshPick();
       setMsg("");
       if (type === "video") {
-        restartVideos();
-        if (state.autoSync) autoDetectPanel(which);
+        if (state.autoSync && MOTION) {
+          autoDetectPanel(which);
+        } else {
+          restartVideos();
+        }
       }
     };
     if (isVideo) {
       const v = document.createElement("video");
       v.muted = true; v.loop = false; v.playsInline = true; v.preload = "auto";
+      v.setAttribute("playsinline", "");
+      v.setAttribute("webkit-playsinline", "");
+      mediaPool.appendChild(v);
       v.ondurationchange = () => refreshTrimUI();
       v.onloadeddata = () => done(v, "video");
-      v.onerror = () => { URL.revokeObjectURL(url); setMsg("この動画は読み込めませんでした（形式を確認してください）。", "err"); };
+      v.onerror = () => {
+        try { v.removeAttribute("src"); v.load(); v.remove(); } catch (e) {}
+        URL.revokeObjectURL(url);
+        setMsg("この動画は読み込めませんでした（形式を確認してください）。", "err");
+      };
       v.src = url;
     } else {
       const img = new Image();
@@ -657,34 +828,75 @@
 
   function clearPanel(which) {
     const p = state.panels[which];
-    p.scanId++;
-    if (p.type === "video" && p.el) p.el.pause();
-    if (p.url) URL.revokeObjectURL(p.url);
+    destroyPanelMedia(p);
     state.panels[which] = newPanel();
     refreshPick();
     $("zoom" + cap(which)).value = 1;
   }
 
-  function restartVideos() {
+  async function restartVideos() {
     clearLoopTimer();
-    videos().forEach(p => {
-      const start = clamp(p.trimStart || 0, 0, maxTrimFor(p));
-      try { p.el.currentTime = start; } catch (e) {}
-      if (state.playing && !state.exporting && !scrubbingTrim) {
-        p.el.play().catch(() => {});
+    const myToken = ++syncToken;
+    const vids = videos();
+    if (!vids.length) {
+      syncingVideos = false;
+      return;
+    }
+    if (vids.some(p => p.scanning)) {
+      vids.forEach(p => { if (p.el) p.el.pause(); });
+      syncingVideos = false;
+      return;
+    }
+    vids.forEach(p => {
+      if (!syncingVideos && p.el && !p.el.seeking && p.el.readyState >= 2) {
+        captureHoldFrame(p);
       }
+      if (p.el) p.el.pause();
     });
+    syncingVideos = true;
+
+    const cancelled = () => myToken !== syncToken || state.exporting || scrubbingTrim;
+    const abortCleanly = () => {
+      if (myToken === syncToken) syncingVideos = false;
+    };
+
+    for (const p of vids) {
+      if (cancelled()) { abortCleanly(); return; }
+      const start = clamp(p.trimStart || 0, 0, maxTrimFor(p));
+      if (state.playing) {
+        await primeVideoForStart(p, start, cancelled);
+      } else {
+        await seekTo(p.el, start);
+      }
+      if (cancelled()) { abortCleanly(); return; }
+      captureHoldFrame(p);
+    }
+
+    if (cancelled()) { abortCleanly(); return; }
+    if (state.playing) {
+      await Promise.all(vids.map(p => p.el.play().catch(() => {})));
+      await nextFrame();
+    }
+    if (cancelled()) { abortCleanly(); return; }
+    syncingVideos = false;
   }
+
   function setPlaying(on) {
     state.playing = on;
     $("btnPlay").textContent = on ? "⏸ 停止" : "▶ 再生";
     clearLoopTimer();
     const vids = videos();
-    if (on && vids.length > 0 && vids.every(isVideoAtEnd)) {
+    if (!on) {
+      syncToken++;
+      syncingVideos = false;
+      vids.forEach(p => p.el.pause());
+      return;
+    }
+    if (vids.length > 0 && vids.every(isVideoAtEnd)) {
       restartVideos();
       return;
     }
-    vids.forEach(p => on ? p.el.play().catch(() => {}) : p.el.pause());
+    vids.forEach(p => p.el.play().catch(() => {}));
   }
 
   // ---------- プレビュー操作（ドラッグ/ホイール/ドロップ） ----------
@@ -830,23 +1042,10 @@
     ];
     return list.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
   }
-  function seekTo(v, sec) {
-    return new Promise((res) => {
-      const target = Math.max(0, sec || 0);
-      if (Math.abs(v.currentTime - target) < 0.005 && !v.seeking && v.readyState >= 2) {
-        res();
-        return;
-      }
-      let done = false;
-      const f = () => { if (!done) { done = true; v.removeEventListener("seeked", f); res(); } };
-      v.addEventListener("seeked", f);
-      try { v.currentTime = target; } catch (e) { f(); return; }
-      setTimeout(f, 800);
-    });
-  }
-
   async function saveVideo() {
     if (state.exporting) return;
+    syncToken++;
+    syncingVideos = false;
     clearLoopTimer();
     stopBgmPreview();
     if (!state.panels.before.el && !state.panels.after.el) {
@@ -868,7 +1067,7 @@
     const mime = pickMime();
     const ext = mime.includes("mp4") ? "mp4" : "webm";
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
-    const cctx = cv.getContext("2d");
+    const cctx = cv.getContext("2d", { alpha: false });
 
     // iPad Safari対策：最初のawaitより前（タップ同期タイミング）にAudioContextを確保
     const which = $("selAudio").value;
@@ -886,6 +1085,7 @@
     }
 
     state.exporting = true;
+    vids.forEach(p => { if (p.el) p.el.pause(); });
     $("btnSave").disabled = true; $("btnPng").disabled = true;
     $("progressBox").hidden = false; $("progressBar").style.width = "0%";
 
@@ -907,6 +1107,17 @@
       } else {
         dur = Math.min(maxSec, state.bgm.photoSec || 8);
       }
+
+      // 録画開始前に各動画を順番にプリロール（デコーダ温め）し、スタート直後のカクつきを防止
+      if (vids.length) {
+        setMsg("スタート位置を滑らかに準備しています…");
+        for (const p of vids) {
+          const ts = clamp(p.trimStart || 0, 0, maxTrimFor(p));
+          await primeVideoForStart(p, ts, () => false);
+          captureHoldFrame(p);
+        }
+      }
+
       setMsg(`書き出し中…（約${Math.ceil(dur)}秒）このタブを開いたままにしてください。`);
 
       const stream = cv.captureStream(30);
@@ -926,10 +1137,6 @@
         if (tracks[0]) stream.addTrack(tracks[0]);
       }
 
-      // 揃えられた開始位置（trimStart）へ頭出し
-      vids.forEach(p => p.el.pause());
-      await Promise.all(vids.map(p => seekTo(p.el, clamp(p.trimStart || 0, 0, maxTrimFor(p)))));
-
       const rec = new MediaRecorder(stream, Object.assign(
         { videoBitsPerSecond: pro ? 10_000_000 : 6_000_000 },
         mime ? { mimeType: mime } : {}
@@ -939,6 +1146,13 @@
       const stopped = new Promise((res) => { rec.onstop = res; });
 
       render(cctx, w, h, {});
+      pctx.drawImage(cv, 0, 0, pv.width, pv.height);
+
+      // プリロール済みのホットポーズ状態から全動画を先に再生開始し、1フレーム進めてから録画開始
+      if (vids.length) {
+        await Promise.all(vids.map(p => p.el.play().catch(() => {})));
+        await nextFrame();
+      }
       if (wantBgm && audioCtx && dest) {
         bgmRec = BGM.start(audioCtx, dest, {
           seed: state.bgm.seed,
@@ -946,19 +1160,28 @@
           durationSec: dur
         });
       }
-      rec.start(250);
-      await Promise.all(vids.map(p => p.el.play().catch(() => {})));
+      rec.start(1000);
       const t0 = performance.now();
+      let lastProg = -1;
+      let frameIdx = 0;
       await new Promise((resolve) => {
         const loop = () => {
-          const t = (performance.now() - t0) / 1000;
+          const now = performance.now();
+          const t = (now - t0) / 1000;
           render(cctx, w, h, {});
-          $("progressBar").style.width = Math.min(100, t / dur * 100) + "%";
+          if ((frameIdx++ & 1) === 0) {
+            pctx.drawImage(cv, 0, 0, pv.width, pv.height);
+          }
+          if (now - lastProg >= 100) {
+            lastProg = now;
+            $("progressBar").style.width = Math.min(100, t / dur * 100) + "%";
+          }
           if (t >= dur) return resolve();
           requestAnimationFrame(loop);
         };
         loop();
       });
+      $("progressBar").style.width = "100%";
       rec.stop();
       await stopped;
 
@@ -1006,6 +1229,8 @@
         if (p.type !== "video") return;
         p.scanId++;
         p.scanning = false;
+        syncToken++;
+        syncingVideos = false;
         scrubbingTrim = true;
         clearLoopTimer();
         videos().forEach(vp => vp.el.pause());
