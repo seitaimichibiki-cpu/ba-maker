@@ -19,8 +19,7 @@ window.BAM_CONFIG = {
   PAYMENT_URL: "",
 
   // 2. ライセンス自動認証・2台制限・解約自動遮断サーバー（Cloudflare Worker）のURL
-  //    例: "https://ba-maker-license.your-subdomain.workers.dev"
-  LICENSE_API_URL: "",
+  LICENSE_API_URL: "https://ba-maker-license.seitaimichibiki.workers.dev",
 
   // 3. Stripe カスタマーポータル（契約管理・解約手続きページ）のURL（※ヘルプページの多段階解約フロー最終ステップで使用）
   //    例: "https://billing.stripe.com/p/login/xxxxxxxx"

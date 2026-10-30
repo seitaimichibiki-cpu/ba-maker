@@ -2,10 +2,10 @@ name = "ba-maker-license"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
-# 1. `npx wrangler kv namespace create LICENSES` を実行し、表示された id に書き換えてください
+# Cloudflare KV ネームスペース（本番用）
 [[kv_namespaces]]
 binding = "LICENSES"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "a601d2ffbacf47acb2a4deb401ece5ec"
 
 [vars]
 BRAND_NAME = "BAメーカー"

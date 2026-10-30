@@ -82,7 +82,7 @@ npx wrangler secret put ADMIN_SECRET
 npx wrangler deploy
 ```
 
-デプロイ完了後に表示される Worker URL（例：`https://ba-maker-license.<サブドメイン>.workers.dev`）を控えます。
+デプロイ完了後に表示される Worker URL（例：`https://ba-maker-license.seitaimichibiki.workers.dev`）を控えます。
 
 ---
 
@@ -102,7 +102,7 @@ npx wrangler deploy
    - Stripeダッシュボード「開発者 → Webhook → エンドポイントを追加」を開きます。
    - **エンドポイントURL**：
      ```text
-     https://ba-maker-license.<サブドメイン>.workers.dev/webhook/stripe
+     https://ba-maker-license.seitaimichibiki.workers.dev/webhook/stripe
      ```
    - **リッスンするイベント（以下5つを選択）**：
      - `checkout.session.completed`（決済完了 → キー自動発行＆`seitaimichibiki@gmail.com` から自動メール送信）
@@ -124,7 +124,7 @@ npx wrangler deploy
 
 ```js
 PAYMENT_URL: "https://buy.stripe.com/xxxxxxxx",
-LICENSE_API_URL: "https://ba-maker-license.<サブドメイン>.workers.dev",
+LICENSE_API_URL: "https://ba-maker-license.seitaimichibiki.workers.dev",
 CUSTOMER_PORTAL_URL: "https://billing.stripe.com/p/login/xxxxxxxx",
 ```
 
@@ -135,7 +135,7 @@ CUSTOMER_PORTAL_URL: "https://billing.stripe.com/p/login/xxxxxxxx",
 機種変更時に古い端末が手元になく「2台枠」をリセットしたい場合や、メールアドレス入力ミスの方へ再送したい場合は `tools/admin_license.js` で管理できます。
 
 ```bash
-export WORKER_URL="https://ba-maker-license.<サブドメイン>.workers.dev"
+export WORKER_URL="https://ba-maker-license.seitaimichibiki.workers.dev"
 export ADMIN_SECRET="<設定したADMIN_SECRET>"
 
 # キーの手動発行（メールアドレスを指定すると seitaimichibiki@gmail.com から自動メールも送信）
