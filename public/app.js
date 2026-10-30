@@ -36,6 +36,8 @@
     sub:     { dx: 0, dy: 0 }
   });
 
+  const BGM = window.BAM_BGM;
+
   // ---------- 状態 ----------
   const newPanel = () => ({ type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0 });
   const state = {
@@ -44,10 +46,64 @@
     preferredTheme: "dark",
     custom: { bg: "#111111", text: "#ffffff", accent: "#ff5a5f" },
     textPos: newTextPos(),
+    bgm: { enabled: true, seed: 1, volume: 0.7, photoSec: 8 },
     guide: false, playing: true, exporting: false,
     logo: null,
     panels: { before: newPanel(), after: newPanel() }
   };
+
+  let bgmPreview = null;
+
+  function stopBgmPreview() {
+    if (bgmPreview) {
+      bgmPreview.stop();
+      bgmPreview = null;
+    }
+    const btn = $("btnBgmPreview");
+    if (btn) btn.textContent = "🎧 試聴";
+  }
+
+  function refreshBgmUI() {
+    const info = BGM.describeTrack(state.bgm.seed);
+    $("bgmTitle").textContent = state.bgm.enabled ? "🎵 " + info.title : "BGMオフ（" + info.title + "）";
+    $("chkBgm").checked = state.bgm.enabled;
+    $("chkBgm").closest(".bgm-box").classList.toggle("off", !state.bgm.enabled);
+    const willVideo = Object.values(state.panels).some(p => p.type === "video") || state.bgm.enabled;
+    $("btnSave").textContent = willVideo
+      ? (state.bgm.enabled ? "💾 動画で保存する（🎵BGM付き）" : "💾 動画で保存する")
+      : "💾 画像（PNG）で保存する";
+  }
+
+  function toggleBgmPreview() {
+    if (bgmPreview) {
+      stopBgmPreview();
+      return;
+    }
+    if (!state.bgm.enabled) {
+      state.bgm.enabled = true;
+      saveSettings();
+      refreshBgmUI();
+    }
+    try {
+      const ctx = BGM.ensureContext();
+      bgmPreview = BGM.start(ctx, ctx.destination, { seed: state.bgm.seed, volume: state.bgm.volume });
+      $("btnBgmPreview").textContent = "⏹ 停止";
+      restartVideos();
+    } catch (e) {
+      setMsg(e.message || "試聴を開始できませんでした。", "err");
+    }
+  }
+
+  function nextBgmTrack() {
+    state.bgm.seed = (state.bgm.seed % 999) + 1;
+    if (!state.bgm.enabled) state.bgm.enabled = true;
+    saveSettings();
+    refreshBgmUI();
+    if (bgmPreview) {
+      stopBgmPreview();
+      toggleBgmPreview();
+    }
+  }
 
   function textXY(key) {
     const b = TEXT_BASE[key], p = state.textPos[key];
@@ -72,7 +128,8 @@
       localStorage.setItem(LS_SETTINGS, JSON.stringify({
         theme: state.preferredTheme || state.theme,
         custom: state.custom,
-        textPos: state.textPos
+        textPos: state.textPos,
+        bgm: state.bgm
       }));
     } catch (e) {}
   }
@@ -80,33 +137,43 @@
   function loadSettings() {
     try {
       const raw = localStorage.getItem(LS_SETTINGS);
-      if (!raw) return;
-      const d = JSON.parse(raw);
-      if (d && d.custom) {
-        if (isHex(d.custom.bg)) state.custom.bg = d.custom.bg;
-        if (isHex(d.custom.text)) state.custom.text = d.custom.text;
-        if (isHex(d.custom.accent)) state.custom.accent = d.custom.accent;
-      }
-      $("cBg").value = state.custom.bg;
-      $("cText").value = state.custom.text;
-      $("cAccent").value = state.custom.accent;
-      if (d && typeof d.theme === "string" && THEMES[d.theme]) {
-        state.preferredTheme = d.theme;
-        state.theme = THEMES[d.theme].pro && !pro ? "dark" : d.theme;
-      }
-      if (d && d.textPos) {
-        Object.keys(TEXT_BASE).forEach((k) => {
-          const tp = d.textPos[k], b = TEXT_BASE[k];
-          if (tp && typeof tp.dx === "number" && isFinite(tp.dx)) {
-            state.textPos[k].dx = clamp(Math.round(tp.dx), 80 - b.x, LW - 80 - b.x);
-          }
-          if (tp && typeof tp.dy === "number" && isFinite(tp.dy)) {
-            state.textPos[k].dy = clamp(Math.round(tp.dy), 60 - b.y, LH - 60 - b.y);
-          }
-        });
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d && d.custom) {
+          if (isHex(d.custom.bg)) state.custom.bg = d.custom.bg;
+          if (isHex(d.custom.text)) state.custom.text = d.custom.text;
+          if (isHex(d.custom.accent)) state.custom.accent = d.custom.accent;
+        }
+        $("cBg").value = state.custom.bg;
+        $("cText").value = state.custom.text;
+        $("cAccent").value = state.custom.accent;
+        if (d && typeof d.theme === "string" && THEMES[d.theme]) {
+          state.preferredTheme = d.theme;
+          state.theme = THEMES[d.theme].pro && !pro ? "dark" : d.theme;
+        }
+        if (d && d.textPos) {
+          Object.keys(TEXT_BASE).forEach((k) => {
+            const tp = d.textPos[k], b = TEXT_BASE[k];
+            if (tp && typeof tp.dx === "number" && isFinite(tp.dx)) {
+              state.textPos[k].dx = clamp(Math.round(tp.dx), 80 - b.x, LW - 80 - b.x);
+            }
+            if (tp && typeof tp.dy === "number" && isFinite(tp.dy)) {
+              state.textPos[k].dy = clamp(Math.round(tp.dy), 60 - b.y, LH - 60 - b.y);
+            }
+          });
+        }
+        if (d && d.bgm) {
+          if (typeof d.bgm.enabled === "boolean") state.bgm.enabled = d.bgm.enabled;
+          if (typeof d.bgm.seed === "number" && d.bgm.seed >= 1) state.bgm.seed = Math.floor(d.bgm.seed);
+          if (typeof d.bgm.volume === "number" && isFinite(d.bgm.volume)) state.bgm.volume = clamp(d.bgm.volume, 0.1, 1);
+          if ([5, 8, 10, 15].includes(Number(d.bgm.photoSec))) state.bgm.photoSec = Number(d.bgm.photoSec);
+        }
       }
     } catch (e) {}
+    $("bgmVol").value = state.bgm.volume;
+    $("selPhotoSec").value = String(state.bgm.photoSec);
     syncTextSliders();
+    refreshBgmUI();
   }
 
   // ---------- ライセンス ----------
@@ -425,6 +492,7 @@
       el.textContent = p.name || "タップして選ぶ";
       el.closest(".pick").classList.toggle("done", !!p.el);
     });
+    refreshBgmUI();
   }
   function videos() { return Object.values(state.panels).filter(p => p.type === "video"); }
 
@@ -631,44 +699,71 @@
 
   async function saveVideo() {
     if (state.exporting) return;
+    stopBgmPreview();
+    if (!state.panels.before.el && !state.panels.after.el) {
+      setMsg("先にビフォー／アフターの写真か動画を追加してください。", "err");
+      return;
+    }
     const vids = videos();
-    if (!vids.length) { setMsg("動画で保存するには、ビフォーかアフターに動画を追加してください。画像だけの場合はPNG保存をご利用ください。", "err"); return; }
-    if (!window.MediaRecorder) { setMsg("このブラウザは動画書き出しに非対応です。Chrome / Edge / Safari 最新版をお使いください。", "err"); return; }
+    if (!vids.length && !state.bgm.enabled) {
+      savePng();
+      return;
+    }
+    if (!window.MediaRecorder) {
+      setMsg("このブラウザは動画書き出しに非対応です。Chrome / Edge / Safari 最新版をお使いください。", "err");
+      return;
+    }
 
     const { w, h } = exportSize();
     const maxSec = lim().maxSeconds;
-    const longest = Math.max(...vids.map(p => p.el.duration || 0));
-    const dur = Math.min(maxSec, isFinite(longest) && longest > 0 ? longest : maxSec);
+    let dur;
+    if (vids.length) {
+      const longest = Math.max(...vids.map(p => p.el.duration || 0));
+      dur = Math.min(maxSec, isFinite(longest) && longest > 0 ? longest : maxSec);
+    } else {
+      dur = Math.min(maxSec, state.bgm.photoSec || 8);
+    }
     const mime = pickMime();
     const ext = mime.includes("mp4") ? "mp4" : "webm";
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
     const cctx = cv.getContext("2d");
+
+    // iPad Safari対策：最初のawaitより前（タップ同期タイミング）にAudioContextを確保
+    const which = $("selAudio").value;
+    const ap = which !== "none" ? state.panels[which] : null;
+    const wantOrigAudio = !!(ap && ap.type === "video");
+    const wantBgm = !!state.bgm.enabled;
+    let audioCtx = null, dest = null, audioNode = null, audioEl = null, bgmRec = null;
+    if (wantOrigAudio || wantBgm) {
+      try {
+        audioCtx = BGM.ensureContext();
+        dest = audioCtx.createMediaStreamDestination();
+      } catch (e) {
+        console.warn(e);
+      }
+    }
 
     state.exporting = true;
     $("btnSave").disabled = true; $("btnPng").disabled = true;
     $("progressBox").hidden = false; $("progressBar").style.width = "0%";
     setMsg(`書き出し中…（約${Math.ceil(dur)}秒）このタブを開いたままにしてください。`);
 
-    let audioCtx = null, audioNode = null, audioEl = null;
     try {
-      // 音声
-      const which = $("selAudio").value;
-      const ap = which !== "none" ? state.panels[which] : null;
       const stream = cv.captureStream(30);
-      if (ap && ap.type === "video") {
-        try {
-          if (!ap.audioSrc) {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            ap.audioSrc = new AC().createMediaElementSource(ap.el);
+      if (audioCtx && dest) {
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+        if (wantOrigAudio) {
+          try {
+            if (!ap.audioSrc) ap.audioSrc = audioCtx.createMediaElementSource(ap.el);
+            ap.audioSrc.connect(dest);
+            audioNode = ap.audioSrc; audioEl = ap.el;
+            ap.el.muted = false;
+          } catch (e) {
+            setMsg("元動画の音声取り込みに失敗したため、元音声なしで書き出します。");
           }
-          audioCtx = ap.audioSrc.context;
-          if (audioCtx.state === "suspended") await audioCtx.resume();
-          const dest = audioCtx.createMediaStreamDestination();
-          ap.audioSrc.connect(dest);
-          audioNode = ap.audioSrc; audioEl = ap.el;
-          ap.el.muted = false;
-          stream.addTrack(dest.stream.getAudioTracks()[0]);
-        } catch (e) { setMsg("音声の取り込みに失敗したため、音声なしで書き出します。"); }
+        }
+        const tracks = dest.stream.getAudioTracks();
+        if (tracks[0]) stream.addTrack(tracks[0]);
       }
 
       // 頭出し
@@ -684,6 +779,13 @@
       const stopped = new Promise((res) => { rec.onstop = res; });
 
       render(cctx, w, h, {});
+      if (wantBgm && audioCtx && dest) {
+        bgmRec = BGM.start(audioCtx, dest, {
+          seed: state.bgm.seed,
+          volume: state.bgm.volume,
+          durationSec: dur
+        });
+      }
       rec.start(250);
       await Promise.all(vids.map(p => p.el.play().catch(() => {})));
       const t0 = performance.now();
@@ -703,12 +805,13 @@
       const blob = new Blob(chunks, { type: (rec.mimeType || mime || "video/webm").split(";")[0] });
       download(blob, `before-after-${stamp()}.${ext}`);
       setMsg(ext === "mp4"
-        ? "MP4を保存しました。"
+        ? (wantBgm ? "BGM付きのMP4動画を保存しました。" : "MP4を保存しました。")
         : "WebMで保存しました（Instagramに投稿できない場合はMP4へ変換が必要です。READMEを参照）。", "ok");
     } catch (err) {
       console.error(err);
       setMsg("書き出しに失敗しました：" + (err && err.message ? err.message : err), "err");
     } finally {
+      if (bgmRec) bgmRec.stop();
       if (audioNode) { try { audioNode.disconnect(); } catch (e) {} }
       if (audioEl) audioEl.muted = true;
       state.exporting = false;
@@ -763,6 +866,27 @@
       saveSettings();
     };
 
+    $("chkBgm").onchange = (e) => {
+      state.bgm.enabled = e.target.checked;
+      if (!state.bgm.enabled) stopBgmPreview();
+      saveSettings();
+      refreshBgmUI();
+    };
+    $("btnBgmPreview").onclick = toggleBgmPreview;
+    $("btnBgmNext").onclick = nextBgmTrack;
+    $("bgmVol").oninput = (e) => {
+      state.bgm.volume = clamp(parseFloat(e.target.value) || 0.7, 0.1, 1);
+      if (bgmPreview) bgmPreview.setVolume(state.bgm.volume);
+      saveSettings();
+    };
+    $("selPhotoSec").onchange = (e) => {
+      state.bgm.photoSec = parseInt(e.target.value, 10) || 8;
+      saveSettings();
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stopBgmPreview();
+    });
+
     $("btnLogo").onclick = () => { if (requirePro("ロゴ挿入")) $("fileLogo").click(); };
     $("fileLogo").onchange = (e) => {
       const f = e.target.files[0]; if (!f) return;
@@ -778,7 +902,7 @@
     $("btnRestart").onclick = restartVideos;
     $("chkGuide").onchange = (e) => { state.guide = e.target.checked; };
     $("btnPng").onclick = savePng;
-    $("btnSave").onclick = () => (videos().length ? saveVideo() : savePng());
+    $("btnSave").onclick = () => ((videos().length || state.bgm.enabled) ? saveVideo() : savePng());
 
     $("btnUpgrade").onclick = () => openModal();
     $("modalClose").onclick = () => { $("modal").hidden = true; };

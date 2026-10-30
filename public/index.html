@@ -56,10 +56,20 @@
 
     <div class="card">
       <h2><span class="step">3</span> 保存する</h2>
-      <button id="btnSave" class="btn primary big">💾 保存する</button>
+      <div class="bgm-box">
+        <div class="bgm-row">
+          <label class="bgm-check"><input type="checkbox" id="chkBgm" checked> 🎵 自動BGM（アップテンポ）</label>
+          <div class="bgm-actions">
+            <button type="button" id="btnBgmPreview" class="btn tiny">🎧 試聴</button>
+            <button type="button" id="btnBgmNext" class="btn tiny">🎲 曲変更</button>
+          </div>
+        </div>
+        <div id="bgmTitle" class="bgm-title">爽やかポップ #1（126 BPM）</div>
+      </div>
+      <button id="btnSave" class="btn primary big">💾 動画で保存する（🎵BGM付き）</button>
       <div class="progress" id="progressBox" hidden><div id="progressBar"></div></div>
       <p id="msg" class="msg"></p>
-      <p class="hint">動画があれば動画（MP4）、写真だけなら画像（PNG）で保存されます。</p>
+      <p class="hint">BGMオンまたは動画がある場合は動画（MP4）、写真のみでBGMオフなら画像（PNG）で保存されます。</p>
     </div>
 
     <details class="card adv">
@@ -111,16 +121,25 @@
       </div>
       <button id="btnSwap" class="btn tiny">⇄ 左右を入れ替え</button>
 
-      <h3>書き出し</h3>
+      <h3>書き出し・音声</h3>
+      <label class="slider">自動BGMの音量<input type="range" min="0.1" max="1" step="0.05" value="0.7" id="bgmVol"></label>
+      <label>写真のみのときの動画秒数（BGMオン時）
+        <select id="selPhotoSec">
+          <option value="5">5秒</option>
+          <option value="8" selected>8秒（おすすめ）</option>
+          <option value="10">10秒</option>
+          <option value="15">15秒</option>
+        </select>
+      </label>
       <label>画質
         <select id="selQuality">
           <option value="720">720×1280（無料）</option>
           <option value="1080" id="optHQ">1080×1920（有料）</option>
         </select>
       </label>
-      <label>音声
+      <label>元動画の音声（自動BGMと併用も可）
         <select id="selAudio">
-          <option value="none">なし</option>
+          <option value="none">なし（ミュート）</option>
           <option value="before">ビフォー動画の音声</option>
           <option value="after">アフター動画の音声</option>
         </select>
@@ -144,6 +163,7 @@
       <tbody>
         <tr><td>リール用9:16レイアウト</td><td>○</td><td>○</td></tr>
         <tr><td>画像・動画の左右比較</td><td>○</td><td>○</td></tr>
+        <tr><td>自動生成アップテンポBGM</td><td>○</td><td>○</td></tr>
         <tr><td>書き出し画質</td><td>720×1280</td><td>1080×1920</td></tr>
         <tr><td>動画の長さ</td><td>30秒まで</td><td>90秒まで</td></tr>
         <tr><td>透かし表示</td><td>あり</td><td>なし</td></tr>
@@ -166,6 +186,7 @@
 </div>
 
 <script src="config.js"></script>
+<script src="bgm.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
