@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -104,22 +104,42 @@
       </div>
 
       <h3>写真・動画の調整</h3>
+      <label class="check"><input type="checkbox" id="chkAutoSync" checked> 🚶 動画の動き始め（歩き始め）を自動で揃える</label>
       <p class="hint">ドラッグ＝位置調整 ／ ホイール・ピンチ＝拡大縮小</p>
       <div class="two">
         <div class="slot">
           <h3><span class="tag before">BEFORE</span></h3>
+          <div class="trim-box" id="trimBoxBefore" hidden>
+            <label class="slider">開始位置：<b id="trimValBefore">0.0秒</b><input type="range" min="0" max="10" step="0.1" value="0" id="trimBefore"></label>
+            <div class="trim-btns">
+              <button type="button" class="btn tiny" data-trim="before:-0.1">-0.1秒</button>
+              <button type="button" class="btn tiny" data-trim="before:0.1">+0.1秒</button>
+              <button type="button" class="btn tiny" data-trim="before:0">0秒</button>
+            </div>
+          </div>
           <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomBefore"></label>
           <button class="btn tiny" data-reset="before">位置リセット</button>
           <button class="btn tiny" data-clear="before">削除</button>
         </div>
         <div class="slot">
           <h3><span class="tag after">AFTER</span></h3>
+          <div class="trim-box" id="trimBoxAfter" hidden>
+            <label class="slider">開始位置：<b id="trimValAfter">0.0秒</b><input type="range" min="0" max="10" step="0.1" value="0" id="trimAfter"></label>
+            <div class="trim-btns">
+              <button type="button" class="btn tiny" data-trim="after:-0.1">-0.1秒</button>
+              <button type="button" class="btn tiny" data-trim="after:0.1">+0.1秒</button>
+              <button type="button" class="btn tiny" data-trim="after:0">0秒</button>
+            </div>
+          </div>
           <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomAfter"></label>
           <button class="btn tiny" data-reset="after">位置リセット</button>
           <button class="btn tiny" data-clear="after">削除</button>
         </div>
       </div>
-      <button id="btnSwap" class="btn tiny">⇄ 左右を入れ替え</button>
+      <div>
+        <button id="btnSwap" class="btn tiny">⇄ 左右を入れ替え</button>
+        <button id="btnResync" class="btn tiny" hidden>🚶 動き始めを自動で揃え直す</button>
+      </div>
 
       <h3>書き出し・音声</h3>
       <label class="slider">自動BGMの音量<input type="range" min="0.1" max="1" step="0.05" value="0.7" id="bgmVol"></label>
@@ -163,6 +183,7 @@
       <tbody>
         <tr><td>リール用9:16レイアウト</td><td>○</td><td>○</td></tr>
         <tr><td>画像・動画の左右比較</td><td>○</td><td>○</td></tr>
+        <tr><td>動き始め（歩き始め）自動同期</td><td>○</td><td>○</td></tr>
         <tr><td>自動生成アップテンポBGM</td><td>○</td><td>○</td></tr>
         <tr><td>書き出し画質</td><td>720×1280</td><td>1080×1920</td></tr>
         <tr><td>動画の長さ</td><td>30秒まで</td><td>90秒まで</td></tr>
@@ -185,8 +206,9 @@
   </div>
 </div>
 
-<script src="config.js"></script>
-<script src="bgm.js"></script>
-<script src="app.js"></script>
+<script src="config.js?v=2"></script>
+<script src="bgm.js?v=2"></script>
+<script src="motion.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

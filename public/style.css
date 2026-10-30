@@ -112,3 +112,11 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 .bgm-title{font-size:12px;color:var(--ok);margin-top:4px;font-weight:700}
 .bgm-box.off .bgm-title{color:var(--sub);opacity:.6}
 
+/* ---- 動画の開始位置（歩き始め）微調整 ---- */
+.trim-box{border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:8px}
+.trim-box[hidden]{display:none}
+.trim-box b{color:var(--ok)}
+.trim-btns{display:flex;gap:4px;flex-wrap:wrap}
+.trim-btns .btn.tiny{margin:0;padding:4px 8px}
+
+

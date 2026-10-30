@@ -22,6 +22,7 @@
   };
 
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
   const TEXT_BASE = {
     symptom: { x: LW / 2, y: 125,  slider: "posSymptomY" },
@@ -37,9 +38,14 @@
   });
 
   const BGM = window.BAM_BGM;
+  const MOTION = window.BAM_MOTION;
 
   // ---------- 状態 ----------
-  const newPanel = () => ({ type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0 });
+  const newPanel = () => ({
+    type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0,
+    trimStart: 0, autoTrimSec: 0, autoDetected: false,
+    scanning: false, scanId: 0, scanPromise: null, audioSrc: null
+  });
   const state = {
     symptom: "", age: "", clinic: "", sub: "",
     theme: "dark",
@@ -47,6 +53,7 @@
     custom: { bg: "#111111", text: "#ffffff", accent: "#ff5a5f" },
     textPos: newTextPos(),
     bgm: { enabled: true, seed: 1, volume: 0.7, photoSec: 8 },
+    autoSync: true,
     guide: false, playing: true, exporting: false,
     logo: null,
     panels: { before: newPanel(), after: newPanel() }
@@ -130,7 +137,8 @@
         theme: state.preferredTheme || state.theme,
         custom: state.custom,
         textPos: state.textPos,
-        bgm: state.bgm
+        bgm: state.bgm,
+        autoSync: state.autoSync
       }));
     } catch (e) {}
   }
@@ -172,13 +180,18 @@
           if (typeof d.bgm.volume === "number" && isFinite(d.bgm.volume)) state.bgm.volume = clamp(d.bgm.volume, 0.1, 1);
           if ([5, 8, 10, 15].includes(Number(d.bgm.photoSec))) state.bgm.photoSec = Number(d.bgm.photoSec);
         }
+        if (d && typeof d.autoSync === "boolean") {
+          state.autoSync = d.autoSync;
+        }
       }
     } catch (e) {}
     $("inClinic").value = state.clinic;
     $("bgmVol").value = state.bgm.volume;
     $("selPhotoSec").value = String(state.bgm.photoSec);
+    $("chkAutoSync").checked = state.autoSync;
     syncTextSliders();
     refreshBgmUI();
+    refreshTrimUI();
   }
 
   // ---------- ライセンス ----------
@@ -484,22 +497,124 @@
 
   // ---------- プレビュー ----------
   const pv = $("preview"), pctx = pv.getContext("2d");
+  let loopTimer = null;
+  let scrubbingTrim = false;
+
+  function clearLoopTimer() {
+    if (loopTimer) {
+      clearTimeout(loopTimer);
+      loopTimer = null;
+    }
+  }
+  function isVideoAtEnd(p) {
+    const v = p.el;
+    if (!v) return true;
+    if (v.ended) return true;
+    const d = v.duration;
+    return isFinite(d) && d > 0 && v.currentTime >= d - 0.04;
+  }
   function tick() {
+    if (state.playing && !state.exporting && !scrubbingTrim && !loopTimer) {
+      const vids = videos();
+      if (vids.length > 0 && vids.every(isVideoAtEnd)) {
+        loopTimer = setTimeout(() => {
+          loopTimer = null;
+          if (state.playing && !state.exporting && !scrubbingTrim) restartVideos();
+        }, 350);
+      }
+    }
     render(pctx, pv.width, pv.height, { preview: true, guide: state.guide });
     requestAnimationFrame(tick);
   }
 
-  // ---------- メディア読み込み ----------
+  // ---------- メディア読み込み・動き始め同期 ----------
   function setMsg(text, kind) { const m = $("msg"); m.textContent = text || ""; m.className = "msg " + (kind || ""); }
+  function videos() { return Object.values(state.panels).filter(p => p.type === "video"); }
+
+  function maxTrimFor(p) {
+    if (!p || p.type !== "video" || !p.el) return 0;
+    const dur = p.el.duration;
+    if (!isFinite(dur) || dur <= 0.6) return 0;
+    return Math.max(0, Math.round((dur - 0.5) * 10) / 10);
+  }
+
+  function shortName(s) {
+    if (!s) return "";
+    return s.length > 20 ? s.slice(0, 10) + "…" + s.slice(-8) : s;
+  }
+
+  function refreshTrimUI() {
+    ["before", "after"].forEach((w) => {
+      const p = state.panels[w];
+      const W = cap(w);
+      const box = $("trimBox" + W);
+      const slider = $("trim" + W);
+      const label = $("trimVal" + W);
+      if (p.type !== "video") {
+        box.hidden = true;
+        return;
+      }
+      box.hidden = false;
+      const maxT = maxTrimFor(p);
+      slider.max = String(maxT);
+      p.trimStart = clamp(Math.round((p.trimStart || 0) * 10) / 10, 0, maxT);
+      slider.value = String(p.trimStart);
+      label.textContent = p.scanning ? "解析中…" : `${p.trimStart.toFixed(1)}秒`;
+    });
+    $("btnResync").hidden = videos().length === 0;
+    $("chkAutoSync").checked = state.autoSync;
+  }
+
   function refreshPick() {
     ["before", "after"].forEach(w => {
       const p = state.panels[w], el = $("name" + cap(w));
-      el.textContent = p.name || "タップして選ぶ";
+      if (p.scanning) {
+        el.textContent = "🚶 動き始めを解析中…";
+      } else if (p.type === "video" && p.trimStart > 0) {
+        el.textContent = `🚶 ${p.trimStart.toFixed(1)}秒〜 ｜ ${shortName(p.name)}`;
+      } else {
+        el.textContent = p.name || "タップして選ぶ";
+      }
       el.closest(".pick").classList.toggle("done", !!p.el);
     });
     refreshBgmUI();
+    refreshTrimUI();
   }
-  function videos() { return Object.values(state.panels).filter(p => p.type === "video"); }
+
+  function autoDetectPanel(which) {
+    const p = state.panels[which];
+    if (!p || p.type !== "video" || !p.url || !MOTION) return Promise.resolve(0);
+    const token = ++p.scanId;
+    p.scanning = true;
+    refreshPick();
+    const job = MOTION.detectStart(
+      p.url,
+      p.el ? p.el.duration : 0,
+      () => !Object.values(state.panels).includes(p) || p.scanId !== token
+    ).then((sec) => {
+      if (!Object.values(state.panels).includes(p) || p.scanId !== token) return 0;
+      p.scanning = false;
+      p.autoDetected = true;
+      const clamped = clamp(Math.round((sec || 0) * 10) / 10, 0, maxTrimFor(p));
+      p.autoTrimSec = clamped;
+      if (state.autoSync) {
+        p.trimStart = clamped;
+      }
+      refreshPick();
+      if (!state.exporting && !scrubbingTrim) {
+        restartVideos();
+      }
+      return clamped;
+    }).catch(() => {
+      if (Object.values(state.panels).includes(p) && p.scanId === token) {
+        p.scanning = false;
+        refreshPick();
+      }
+      return 0;
+    });
+    p.scanPromise = job;
+    return job;
+  }
 
   function loadFile(which, file) {
     if (!file) return;
@@ -509,31 +624,41 @@
     if (!isVideo && !isImage) { setMsg("画像または動画ファイルを選んでください。", "err"); return; }
     const url = URL.createObjectURL(file);
     const done = (el, type) => {
+      p.scanId++;
+      if (p.type === "video" && p.el) p.el.pause();
       if (p.url) URL.revokeObjectURL(p.url);
-      Object.assign(p, { type, el, url, name: file.name, zoom: 1, ox: 0, oy: 0 });
+      Object.assign(p, {
+        type, el, url, name: file.name, zoom: 1, ox: 0, oy: 0,
+        trimStart: 0, autoTrimSec: 0, autoDetected: false,
+        scanning: false, scanPromise: null, audioSrc: null
+      });
       $("zoom" + cap(which)).value = 1;
       refreshPick();
       setMsg("");
-      if (type === "video") restartVideos();
+      if (type === "video") {
+        restartVideos();
+        if (state.autoSync) autoDetectPanel(which);
+      }
     };
     if (isVideo) {
       const v = document.createElement("video");
-      v.muted = true; v.loop = true; v.playsInline = true; v.preload = "auto";
+      v.muted = true; v.loop = false; v.playsInline = true; v.preload = "auto";
+      v.ondurationchange = () => refreshTrimUI();
       v.onloadeddata = () => done(v, "video");
-      v.onerror = () => setMsg("この動画は読み込めませんでした（形式を確認してください）。", "err");
+      v.onerror = () => { URL.revokeObjectURL(url); setMsg("この動画は読み込めませんでした（形式を確認してください）。", "err"); };
       v.src = url;
     } else {
       const img = new Image();
       img.onload = () => done(img, "image");
-      img.onerror = () => setMsg("この画像は読み込めませんでした。", "err");
+      img.onerror = () => { URL.revokeObjectURL(url); setMsg("この画像は読み込めませんでした。", "err"); };
       img.src = url;
     }
   }
-  const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
   function clearPanel(which) {
     const p = state.panels[which];
-    if (p.type === "video") p.el.pause();
+    p.scanId++;
+    if (p.type === "video" && p.el) p.el.pause();
     if (p.url) URL.revokeObjectURL(p.url);
     state.panels[which] = newPanel();
     refreshPick();
@@ -541,15 +666,25 @@
   }
 
   function restartVideos() {
+    clearLoopTimer();
     videos().forEach(p => {
-      p.el.currentTime = 0;
-      if (state.playing) p.el.play().catch(() => {});
+      const start = clamp(p.trimStart || 0, 0, maxTrimFor(p));
+      try { p.el.currentTime = start; } catch (e) {}
+      if (state.playing && !state.exporting && !scrubbingTrim) {
+        p.el.play().catch(() => {});
+      }
     });
   }
   function setPlaying(on) {
     state.playing = on;
     $("btnPlay").textContent = on ? "⏸ 停止" : "▶ 再生";
-    videos().forEach(p => on ? p.el.play().catch(() => {}) : p.el.pause());
+    clearLoopTimer();
+    const vids = videos();
+    if (on && vids.length > 0 && vids.every(isVideoAtEnd)) {
+      restartVideos();
+      return;
+    }
+    vids.forEach(p => on ? p.el.play().catch(() => {}) : p.el.pause());
   }
 
   // ---------- プレビュー操作（ドラッグ/ホイール/ドロップ） ----------
@@ -695,15 +830,24 @@
     ];
     return list.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
   }
-  function seekZero(v) {
+  function seekTo(v, sec) {
     return new Promise((res) => {
-      let done = false; const f = () => { if (!done) { done = true; v.removeEventListener("seeked", f); res(); } };
-      v.addEventListener("seeked", f); v.currentTime = 0; setTimeout(f, 800);
+      const target = Math.max(0, sec || 0);
+      if (Math.abs(v.currentTime - target) < 0.005 && !v.seeking && v.readyState >= 2) {
+        res();
+        return;
+      }
+      let done = false;
+      const f = () => { if (!done) { done = true; v.removeEventListener("seeked", f); res(); } };
+      v.addEventListener("seeked", f);
+      try { v.currentTime = target; } catch (e) { f(); return; }
+      setTimeout(f, 800);
     });
   }
 
   async function saveVideo() {
     if (state.exporting) return;
+    clearLoopTimer();
     stopBgmPreview();
     if (!state.panels.before.el && !state.panels.after.el) {
       setMsg("先にビフォー／アフターの写真か動画を追加してください。", "err");
@@ -721,13 +865,6 @@
 
     const { w, h } = exportSize();
     const maxSec = lim().maxSeconds;
-    let dur;
-    if (vids.length) {
-      const longest = Math.max(...vids.map(p => p.el.duration || 0));
-      dur = Math.min(maxSec, isFinite(longest) && longest > 0 ? longest : maxSec);
-    } else {
-      dur = Math.min(maxSec, state.bgm.photoSec || 8);
-    }
     const mime = pickMime();
     const ext = mime.includes("mp4") ? "mp4" : "webm";
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
@@ -751,9 +888,27 @@
     state.exporting = true;
     $("btnSave").disabled = true; $("btnPng").disabled = true;
     $("progressBox").hidden = false; $("progressBar").style.width = "0%";
-    setMsg(`書き出し中…（約${Math.ceil(dur)}秒）このタブを開いたままにしてください。`);
 
     try {
+      const pendingScans = vids.map(p => p.scanning && p.scanPromise).filter(Boolean);
+      if (pendingScans.length) {
+        setMsg("動き始めの位置を解析しています…");
+        await Promise.all(pendingScans);
+      }
+
+      let dur;
+      if (vids.length) {
+        const longest = Math.max(...vids.map(p => {
+          const d = p.el.duration || 0;
+          const ts = clamp(p.trimStart || 0, 0, maxTrimFor(p));
+          return isFinite(d) && d > 0 ? Math.max(0.5, d - ts) : 0;
+        }));
+        dur = Math.min(maxSec, isFinite(longest) && longest > 0 ? longest : maxSec);
+      } else {
+        dur = Math.min(maxSec, state.bgm.photoSec || 8);
+      }
+      setMsg(`書き出し中…（約${Math.ceil(dur)}秒）このタブを開いたままにしてください。`);
+
       const stream = cv.captureStream(30);
       if (audioCtx && dest) {
         if (audioCtx.state === "suspended") await audioCtx.resume();
@@ -771,9 +926,9 @@
         if (tracks[0]) stream.addTrack(tracks[0]);
       }
 
-      // 頭出し
+      // 揃えられた開始位置（trimStart）へ頭出し
       vids.forEach(p => p.el.pause());
-      await Promise.all(vids.map(p => seekZero(p.el)));
+      await Promise.all(vids.map(p => seekTo(p.el, clamp(p.trimStart || 0, 0, maxTrimFor(p)))));
 
       const rec = new MediaRecorder(stream, Object.assign(
         { videoBitsPerSecond: pro ? 10_000_000 : 6_000_000 },
@@ -836,18 +991,90 @@
       }));
 
     document.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => $("file" + cap(b.dataset.pick)).click());
+    const finishScrub = () => {
+      if (!scrubbingTrim) return;
+      scrubbingTrim = false;
+      restartVideos();
+    };
     ["before", "after"].forEach(w => {
-      $("file" + cap(w)).onchange = (e) => { loadFile(w, e.target.files[0]); e.target.value = ""; };
-      $("zoom" + cap(w)).oninput = (e) => setZoom(w, parseFloat(e.target.value));
+      const W = cap(w);
+      $("file" + W).onchange = (e) => { loadFile(w, e.target.files[0]); e.target.value = ""; };
+      $("zoom" + W).oninput = (e) => setZoom(w, parseFloat(e.target.value));
+      const trimEl = $("trim" + W);
+      trimEl.oninput = (e) => {
+        const p = state.panels[w];
+        if (p.type !== "video") return;
+        p.scanId++;
+        p.scanning = false;
+        scrubbingTrim = true;
+        clearLoopTimer();
+        videos().forEach(vp => vp.el.pause());
+        p.trimStart = clamp(Math.round((parseFloat(e.target.value) || 0) * 10) / 10, 0, maxTrimFor(p));
+        try { p.el.currentTime = p.trimStart; } catch (err) {}
+        refreshPick();
+      };
+      ["change", "pointerup", "pointercancel", "touchend"].forEach(ev => trimEl.addEventListener(ev, finishScrub));
     });
+    document.querySelectorAll("[data-trim]").forEach(b => b.onclick = () => {
+      const [w, raw] = b.dataset.trim.split(":");
+      const p = state.panels[w];
+      if (!p || p.type !== "video") return;
+      p.scanId++;
+      p.scanning = false;
+      const delta = parseFloat(raw);
+      p.trimStart = delta === 0
+        ? 0
+        : clamp(Math.round((p.trimStart + delta) * 10) / 10, 0, maxTrimFor(p));
+      scrubbingTrim = false;
+      refreshPick();
+      restartVideos();
+    });
+    $("chkAutoSync").onchange = (e) => {
+      state.autoSync = e.target.checked;
+      saveSettings();
+      if (state.autoSync) {
+        let needRestart = false;
+        ["before", "after"].forEach(w => {
+          const p = state.panels[w];
+          if (p.type !== "video") return;
+          if (p.autoDetected) {
+            p.trimStart = clamp(p.autoTrimSec || 0, 0, maxTrimFor(p));
+            needRestart = true;
+          } else {
+            autoDetectPanel(w);
+          }
+        });
+        refreshPick();
+        if (needRestart) restartVideos();
+      } else {
+        ["before", "after"].forEach(w => {
+          const p = state.panels[w];
+          p.scanId++;
+          p.scanning = false;
+          p.trimStart = 0;
+        });
+        refreshPick();
+        restartVideos();
+      }
+    };
+    $("btnResync").onclick = () => {
+      if (!state.autoSync) {
+        state.autoSync = true;
+        $("chkAutoSync").checked = true;
+        saveSettings();
+      }
+      ["before", "after"].forEach(w => {
+        if (state.panels[w].type === "video") autoDetectPanel(w);
+      });
+    };
     document.querySelectorAll("[data-reset]").forEach(b => b.onclick = () => {
       const p = state.panels[b.dataset.reset]; p.ox = 0; p.oy = 0; setZoom(b.dataset.reset, 1);
     });
     document.querySelectorAll("[data-clear]").forEach(b => b.onclick = () => clearPanel(b.dataset.clear));
     $("btnSwap").onclick = () => {
       const t = state.panels.before; state.panels.before = state.panels.after; state.panels.after = t;
+      refreshPick();
       ["before", "after"].forEach(w => {
-        refreshPick();
         $("zoom" + cap(w)).value = state.panels[w].zoom;
       });
     };
