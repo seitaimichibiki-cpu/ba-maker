@@ -429,6 +429,7 @@
     // 下部テキスト：院名（ロゴは左）・補足
     const clinic = state.clinic || (opt.preview ? "院名を入力" : "");
     const { x: cx, y: cy } = textXY("clinic");
+    let clinicHalfH = -30;
     if (clinic) {
       c.textAlign = "center"; c.textBaseline = "middle";
       let maxW = 960, logoW = 0, logoH = 0;
@@ -437,6 +438,7 @@
         logoW = Math.min(logoW, 260); maxW = 960 - logoW - 30;
       }
       const sz = fit(c, clinic, maxW, 88, 38, 900);
+      clinicHalfH = Math.max(sz / 2, logoW ? 60 : 40);
       const tw = c.measureText(clinic).width;
       const total = tw + (logoW ? logoW + 30 : 0);
       const left = cx - total / 2;
@@ -454,6 +456,7 @@
       }
     } else if (state.logo && pro) {
       const lh = 120, lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 400);
+      clinicHalfH = 60;
       c.drawImage(state.logo, cx - lw / 2, cy - lh / 2, lw, lh);
       if (opt.preview) {
         textBoxes.clinic = { x: cx - lw / 2 - 20, y: cy - lh / 2 - 16, w: lw + 40, h: lh + 32 };
@@ -462,6 +465,7 @@
       textBoxes.clinic = null;
     }
 
+    let subBoxY = null, subHalfH = 0;
     if (state.sub) {
       const { x: sx, y: sy } = textXY("sub");
       c.textAlign = "center"; c.textBaseline = "middle";
@@ -469,6 +473,8 @@
       const sz = fit(c, state.sub, 940, 48, 28, 500);
       c.fillText(state.sub, sx, sy);
       c.globalAlpha = 1;
+      subBoxY = sy;
+      subHalfH = sz / 2;
       if (opt.preview) {
         const tw = Math.max(200, c.measureText(state.sub).width);
         textBoxes.sub = { x: sx - tw / 2 - 24, y: sy - sz / 2 - 20, w: tw + 48, h: sz + 40 };
@@ -477,13 +483,35 @@
       textBoxes.sub = null;
     }
 
-    // 透かし（無料）
+    // 透かし（無料プラン：院名の下に表示）
     if (!pro && !opt.noWatermark) {
-      c.textAlign = "center"; c.textBaseline = "middle";
-      c.font = `500 30px ${FONT}`;
-      c.fillStyle = th.text; c.globalAlpha = 0.5;
-      c.fillText(CFG.WATERMARK_TEXT, LW / 2, 1868);
-      c.globalAlpha = 1;
+      c.save();
+      c.font = `700 34px ${FONT}`;
+      const wmText = CFG.WATERMARK_TEXT || "BAメーカー 無料版";
+      const tw = c.measureText(wmText).width;
+      const pw = tw + 56, ph = 58;
+      const wmX = clamp(cx, pw / 2 + 24, LW - pw / 2 - 24);
+      let wmY = cy + clinicHalfH + 48;
+      if (subBoxY !== null && Math.abs(subBoxY - wmY) < 60) {
+        wmY = subBoxY + subHalfH + 46;
+      }
+      if (wmY + ph / 2 > LH - 28) {
+        wmY = Math.max(ph / 2 + 28, cy - Math.max(44, clinicHalfH) - 48);
+      }
+      c.fillStyle = th.bg;
+      c.globalAlpha = 0.75;
+      rr(c, wmX - pw / 2, wmY - ph / 2, pw, ph, ph / 2);
+      c.fill();
+      c.strokeStyle = th.text;
+      c.globalAlpha = 0.35;
+      c.lineWidth = 2;
+      c.stroke();
+      c.fillStyle = th.text;
+      c.globalAlpha = 0.88;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText(wmText, wmX, wmY + 2);
+      c.restore();
     }
 
     // 文字ドラッグ中のガイド線（プレビューのみ）
