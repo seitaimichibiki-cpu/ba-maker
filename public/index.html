@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=8">
+<link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
 
@@ -176,6 +176,24 @@
   </section>
 </main>
 
+<!-- お問い合わせ欄（LINE窓口のみ）＆ 法務・ヘルプフッター -->
+<footer class="site-footer">
+  <div class="contact-card">
+    <div class="contact-text">
+      <h2>💬 お問い合わせ・サポート窓口</h2>
+      <p>使い方のご質問・不具合のご報告・治療院DXシステムのご相談は、公式LINEにて承っております。<small>※お問い合わせは公式LINE窓口のみとなります（メール・お電話での個別サポートは行っておりません）。</small></p>
+    </div>
+    <a id="btnLineContact" href="https://lin.ee/XB6R3kS" target="_blank" rel="noopener noreferrer" class="btn line-btn">💬 公式LINEでお問い合わせ</a>
+  </div>
+  <nav class="footer-links" aria-label="サポート・規約リンク">
+    <a href="help.html">ヘルプ・よくある質問</a>
+    <a href="terms.html">利用規約</a>
+    <a href="privacy.html">プライバシーポリシー</a>
+    <a href="tokushoho.html">特定商取引法に基づく表記</a>
+  </nav>
+  <p class="footer-copy">© 2026 整体院 導 AI Systems</p>
+</footer>
+
 <!-- プラン・ライセンス管理モーダル（無料／有料で画面を分離） -->
 <div id="modal" class="modal" hidden>
   <div class="modal-body">
@@ -197,11 +215,12 @@
           <tr><td>カラーテーマ</td><td>2種</td><td>5種＋自由配色</td></tr>
           <tr><td>院のロゴ挿入</td><td>—</td><td>○</td></tr>
           <tr><td>同時利用できる端末数</td><td>—</td><td>最大2台まで</td></tr>
-          <tr><td>キー発行・解約切り替え</td><td>—</td><td>自動メール／自動切替</td></tr>
+          <tr><td>キー発行・プラン反映</td><td>—</td><td>自動メール／自動切替</td></tr>
         </tbody>
       </table>
       <a id="btnBuy" class="btn primary block" target="_blank" rel="noopener">💳 有料プランに申し込む（キー自動送信）</a>
       <p id="buyNote" class="hint"></p>
+      <p class="legal-agree">お申し込みにより <a href="terms.html" target="_blank">利用規約</a>・<a href="privacy.html" target="_blank">プライバシーポリシー</a>・<a href="tokushoho.html" target="_blank">特定商取引法に基づく表記</a> に同意したものとみなされます。</p>
 
       <div class="key-box">
         <h3>🔑 ライセンスキーをお持ちの方（2台目の登録もこちら）</h3>
@@ -213,7 +232,7 @@
       </div>
     </div>
 
-    <!-- 有料プラン認証済み時の表示：契約状態・2台目用キーコピー・2台枠・端末解除・解約導線 -->
+    <!-- 有料プラン認証済み時の表示：契約状態・2台目用キーコピー・2台枠・端末解除 -->
     <div id="modalProView" hidden>
       <h2>⭐ 有料プラン（ご利用中）</h2>
       <div class="pro-status-card">
@@ -234,23 +253,25 @@
         ✔ 透かしなし ／ ✔ 1080×1920 フルHD ／ ✔ 最大90秒 ／ ✔ 全テーマ＆自由配色 ／ ✔ 院ロゴ挿入
       </div>
 
-      <a id="btnPortal" class="btn block" target="_blank" rel="noopener">📄 ご契約確認・カード変更・解約手続き</a>
-      <p id="portalNote" class="hint"></p>
-
-      <hr>
       <div class="pro-release-box">
         <h3>📱 この端末の登録解除（端末の入れ替え）</h3>
-        <p class="hint">機種変更や別の端末（iPad／PCなど）へ切り替える際は、下のボタンでこの端末の枠を1つ空けられます。解約された場合は自動で無料プランへ戻ります。</p>
+        <p class="hint">機種変更や別の端末（iPad／PCなど）へ切り替える際は、下のボタンでこの端末の枠を1つ空けられます。</p>
         <button id="btnDeactivate" class="btn small">🔓 この端末のライセンスを解除する</button>
         <p id="proMsg" class="msg"></p>
       </div>
+
+      <p class="pro-help-foot">
+        <a href="help.html">ヘルプ・よくある質問</a>
+        <span>／</span>
+        <a id="modalLineContact" href="https://lin.ee/XB6R3kS" target="_blank" rel="noopener noreferrer">公式LINEお問い合わせ</a>
+      </p>
     </div>
   </div>
 </div>
 
-<script src="config.js?v=8"></script>
-<script src="bgm.js?v=8"></script>
-<script src="motion.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="config.js?v=9"></script>
+<script src="bgm.js?v=9"></script>
+<script src="motion.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

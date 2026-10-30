@@ -240,9 +240,9 @@ async function sendLicenseEmail(env, record) {
   const baseAppUrl = String(env.APP_URL || "https://seitaimichibiki-cpu.github.io/ba-maker/").replace(/\?.*$/, "");
   const sep = baseAppUrl.endsWith("/") ? "" : "/";
   const activateUrl = `${baseAppUrl}${sep}?key=${encodeURIComponent(record.key)}`;
+  const helpUrl = `${baseAppUrl}${sep}help.html`;
   const maxDev = getMaxDevices(env, record);
-  const portalUrl = String(env.CUSTOMER_PORTAL_URL || "").trim();
-  const supportEmail = String(env.SUPPORT_EMAIL || "seitaimichibiki@gmail.com").trim();
+  const lineUrl = String(env.LINE_CONTACT_URL || "https://lin.ee/XB6R3kS").trim();
 
   const subject = `【${brand}】有料プランのライセンスキーをお届けします`;
 
@@ -259,9 +259,11 @@ async function sendLicenseEmail(env, record) {
     "【ご利用ルール】",
     `・1契約につき最大 ${maxDev}台 の端末（例：院のiPad＋パソコン等）でご利用いただけます。`,
     "・機種変更や別の端末へ切り替える際は、画面右上の「プラン・端末管理」から「この端末のライセンスを解除する」を押すと枠が空きます。",
-    "・サブスクリプションを解約された場合、契約期間終了後に自動的に無料プランへ戻ります。",
-    portalUrl ? `\n▼ ご契約確認・カード変更・解約手続きはこちら\n${portalUrl}` : "",
-    supportEmail ? `\nお問い合わせ：${supportEmail}` : "",
+    "",
+    `▼ 使い方・ヘルプ・ご契約について`,
+    helpUrl,
+    lineUrl ? `\n▼ お問い合わせ窓口（公式LINEのみ）\n${lineUrl}` : "",
+    "※本メールは送信専用です。ご返信いただいても対応いたしかねますので、お問い合わせは公式LINEよりお願いいたします。",
     "",
     `今後とも ${brand} をよろしくお願いいたします。`
   ].filter((line, idx, arr) => !(line === "" && arr[idx - 1] === "")).join("\n");
@@ -280,10 +282,12 @@ async function sendLicenseEmail(env, record) {
   <ul style="font-size:14px;color:#444;padding-left:20px;margin:16px 0">
     <li>1契約につき<strong>最大 ${maxDev}台 まで</strong>同時登録できます（例：iPad＋PC）。</li>
     <li>端末を入れ替える際は、アプリ画面右上の<strong>「プラン・端末管理」→「この端末のライセンスを解除する」</strong>で枠を空けられます。</li>
-    <li>解約された場合は自動でライセンスが停止し、無料プランへ戻ります。</li>
   </ul>
-  ${portalUrl ? `<p style="font-size:13px;color:#666;margin-top:20px">ご契約内容の確認・お支払い方法の変更・解約手続き：<br><a href="${escapeHtml(portalUrl)}" style="color:#ff5a5f">${escapeHtml(portalUrl)}</a></p>` : ""}
-  ${supportEmail ? `<p style="font-size:12px;color:#888;margin-top:16px;border-top:1px solid #eee;padding-top:12px">お問い合わせ：<a href="mailto:${escapeHtml(supportEmail)}" style="color:#666">${escapeHtml(supportEmail)}</a></p>` : ""}
+  <p style="font-size:13px;color:#666;margin-top:20px">使い方・よくある質問・ご契約情報：<a href="${escapeHtml(helpUrl)}" style="color:#555">${escapeHtml(helpUrl)}</a></p>
+  <div style="font-size:12px;color:#666;margin-top:16px;border-top:1px solid #eee;padding-top:12px">
+    ${lineUrl ? `<p style="margin:0 0 6px">お問い合わせ窓口（公式LINEのみ）：<a href="${escapeHtml(lineUrl)}" style="color:#06c755;font-weight:700">${escapeHtml(lineUrl)}</a></p>` : ""}
+    <p style="margin:0;color:#888">※本メールは自動送信専用です。返信での対応は行っておりませんので、お問い合わせは公式LINEよりお願いいたします。</p>
+  </div>
 </div>`.trim();
 
   // 1. 独自ドメイン不要：Gmail ＋ Google Apps Script（GAS）経由で自動送信
@@ -298,8 +302,7 @@ async function sendLicenseEmail(env, record) {
         subject,
         text: textBody,
         html: htmlBody,
-        senderName: brand,
-        replyTo: supportEmail
+        senderName: brand
       }),
       redirect: "manual"
     });
@@ -320,7 +323,7 @@ async function sendLicenseEmail(env, record) {
     return { sent: true, provider: "gmail_gas" };
   }
 
-  const fromEmail = env.FROM_EMAIL || `BAメーカー <${supportEmail}>`;
+  const fromEmail = env.FROM_EMAIL || "BAメーカー <seitaimichibiki@gmail.com>";
 
   if (env.RESEND_API_KEY) {
     const resp = await fetch("https://api.resend.com/emails", {

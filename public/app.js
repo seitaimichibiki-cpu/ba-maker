@@ -337,12 +337,18 @@
       ? "決済完了後、ご登録メール宛にワンタップ有効化リンク＆ライセンスキーが即時自動送信されます（最大2台まで利用可）。"
       : "※購入ページは準備中です（管理者が config.js の PAYMENT_URL を設定すると有効になります）。";
 
+    const lineUrl = String(CFG.LINE_CONTACT_URL || "https://lin.ee/XB6R3kS").trim();
+    ["btnLineContact", "modalLineContact"].forEach((id) => {
+      const el = $(id);
+      if (el && lineUrl) el.href = lineUrl;
+    });
+
     if (pro) {
       const maxD = (licMeta && licMeta.maxDevices) || CFG.MAX_DEVICES || 2;
       const curD = (licMeta && licMeta.deviceCount) || 1;
       const rawSaved = normKey(localStorage.getItem(LS_KEY) || "");
       $("proStatusBadge").textContent = (licMeta && licMeta.cancelAtPeriodEnd)
-        ? "有効（期間終了で自動解約）"
+        ? "有効（期間終了で自動終了）"
         : "有効（認証済み）";
       $("proKeyMasked").textContent = (showFullKey && rawSaved)
         ? rawSaved
@@ -356,26 +362,11 @@
       if (licMeta && licMeta.cancelAtPeriodEnd) {
         const endStr = formatJpDate(licMeta.currentPeriodEnd);
         subNote.textContent = endStr
-          ? `※解約予約済みです。${endStr}までは有料プランをご利用いただけ、その後は自動で無料プランへ戻ります。`
-          : "※解約予約済みです。契約期間終了後に自動で無料プランへ戻ります。";
+          ? `※${endStr}までは有料プランをご利用いただけ、その後は自動で無料プランへ戻ります。`
+          : "※現在の契約期間終了後に自動で無料プランへ戻ります。";
         subNote.hidden = false;
       } else {
         subNote.hidden = true;
-      }
-
-      const portal = $("btnPortal");
-      const supMail = String(CFG.SUPPORT_EMAIL || "").trim();
-      if (CFG.CUSTOMER_PORTAL_URL) {
-        portal.href = CFG.CUSTOMER_PORTAL_URL;
-        portal.hidden = false;
-        $("portalNote").textContent = "Stripeの契約管理ページでお支払い方法の変更・解約手続きが行えます" +
-          (supMail ? `（お問い合わせ：${supMail}）。` : "。");
-      } else {
-        portal.removeAttribute("href");
-        portal.hidden = true;
-        $("portalNote").textContent = supMail
-          ? `ご契約の確認・解約は、購入完了メール内のリンク、または ${supMail} までご連絡ください。`
-          : "ご契約の確認・解約は、購入完了メール内のリンクからお手続きいただけます。";
       }
     }
   }
@@ -2076,7 +2067,6 @@
     $("modalClose").onclick = () => { $("modal").hidden = true; };
     $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) $("modal").hidden = true; });
     $("btnBuy").addEventListener("click", (e) => { if (!CFG.PAYMENT_URL) e.preventDefault(); });
-    $("btnPortal").addEventListener("click", (e) => { if (!CFG.CUSTOMER_PORTAL_URL) e.preventDefault(); });
 
     const doActivate = async () => {
       const key = $("inKey").value;

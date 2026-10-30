@@ -60,7 +60,7 @@ npx wrangler login
 npx wrangler kv namespace create LICENSES
 ```
 
-表示された `id = "xxxxxxxxxxxxxxxx"` を **`worker/wrangler.toml` の `[[kv_namespaces]]` の `id` に貼り付け**ます（送信元・連絡先は `seitaimichibiki@gmail.com` に設定済みです）。
+表示された `id = "xxxxxxxxxxxxxxxx"` を **`worker/wrangler.toml` の `[[kv_namespaces]]` の `id` に貼り付け**ます（自動送信元は `seitaimichibiki@gmail.com`、お問い合わせ窓口はBtoB公式LINE `https://lin.ee/XB6R3kS` に設定済みです）。
 
 次に、機密情報を Cloudflare Secret として安全に登録してデプロイします。
 
@@ -95,9 +95,8 @@ npx wrangler deploy
      https://seitaimichibiki-cpu.github.io/ba-maker/?session_id={CHECKOUT_SESSION_ID}
      ```
 
-2. **Stripe カスタマーポータル（解約・カード変更ページ）の有効化**
-   - Stripeダッシュボード「設定 → 請求 → カスタマーポータル」で **リンクを有効化** し、ポータルURL（`https://billing.stripe.com/p/login/...`）を控えます。
-   - `worker/wrangler.toml` の `CUSTOMER_PORTAL_URL` にも設定して `npx wrangler deploy` しておくと、自動送信メール内にも解約・契約確認リンクが記載されます。
+2. **Stripe カスタマーポータル（解約ページ）の有効化**
+   - Stripeダッシュボード「設定 → 請求 → カスタマーポータル」で **リンクを有効化** し、ポータルURL（`https://billing.stripe.com/p/login/...`）を控えます（※このURLは `public/config.js` の `CUSTOMER_PORTAL_URL` に設定され、`help.html` 内の複数ステップ解約フロー完了後にのみ表示されます）。
 
 3. **Stripe Webhook の登録（自動メール送信＆解約・未払い自動遮断）**
    - Stripeダッシュボード「開発者 → Webhook → エンドポイントを追加」を開きます。
@@ -167,7 +166,7 @@ cd public && python3 -m http.server 8000
 
 ## ファイル構成
 
-- `public/` … 公開サイト本体（`index.html` / `style.css` / `app.js` / `bgm.js` / `motion.js` / `config.js`）
+- `public/` … 公開サイト本体（`index.html` / `style.css` / `app.js` / `bgm.js` / `motion.js` / `config.js` / `help.html` / `help.js` / `privacy.html` / `terms.html` / `tokushoho.html`）
 - `gas/Code.gs` … 独自ドメイン不要の自動メール送信リレー（`seitaimichibiki@gmail.com` ＋ Google Apps Script 用）
 - `worker/` … 自動ライセンス発行・メール送信・2台制限・解約自動遮断サーバー（Cloudflare Workers + KV）
 - `tools/admin_license.js` … 管理者向けライセンス操作CLI（発行・再送・端末枠リセット・停止）

@@ -146,3 +146,61 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
   padding:10px 12px;font-size:12px;color:var(--text);font-weight:700;margin-bottom:12px}
 .pro-release-box h3{margin:0 0 4px;font-size:13px;color:var(--text)}
 .pro-release-box .hint{margin:0 0 10px}
+.legal-agree{font-size:11px;color:var(--sub);margin:8px 0 0;line-height:1.5}
+.legal-agree a{color:var(--sub);text-decoration:underline}
+.pro-help-foot{margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--sub);text-align:center}
+.pro-help-foot a{color:var(--sub);text-decoration:underline}
+.pro-help-foot span{margin:0 6px;opacity:.5}
+
+/* ---- お問い合わせ欄（LINEのみ）＆ フッター ---- */
+.site-footer{max-width:1100px;margin:8px auto 0;padding:0 16px 32px}
+.contact-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 20px;
+  display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.contact-text{flex:1;min-width:240px}
+.contact-text h2{font-size:15px;margin:0 0 4px}
+.contact-text p{font-size:13px;color:var(--sub);margin:0;line-height:1.6}
+.contact-text small{display:block;font-size:11px;color:var(--sub);opacity:.85;margin-top:4px}
+.btn.line-btn{background:#06c755;border-color:#06c755;color:#fff;text-decoration:none;display:inline-flex;
+  align-items:center;justify-content:center;gap:6px;padding:11px 20px;white-space:nowrap}
+.btn.line-btn:hover{filter:brightness(1.06);background:#06c755}
+.footer-links{display:flex;justify-content:center;align-items:center;gap:16px;flex-wrap:wrap;font-size:12px;margin-bottom:8px}
+.footer-links a{color:var(--sub);text-decoration:none}
+.footer-links a:hover{color:var(--text);text-decoration:underline}
+.footer-copy{text-align:center;font-size:11px;color:var(--sub);opacity:.7;margin:0}
+
+/* ---- ヘルプ・法務サブページ共通 ---- */
+.subpage-wrap{max-width:780px;margin:0 auto;padding:24px 16px 48px}
+.subpage-wrap h1{font-size:22px;margin:0 0 6px}
+.subpage-updated{font-size:12px;color:var(--sub);margin:0 0 20px}
+.doc-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:16px}
+.doc-card h2{font-size:16px;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.doc-card h2:first-child{margin-top:0}
+.doc-card p,.doc-card li{font-size:13.5px;color:#cfd5e2;line-height:1.75}
+.doc-card ul,.doc-card ol{padding-left:20px;margin:8px 0 14px}
+.doc-card a{color:#7eb6ff}
+.legal-table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
+.legal-table th,.legal-table td{border:1px solid var(--line);padding:11px 12px;text-align:left;vertical-align:top}
+.legal-table th{width:170px;background:#12151b;color:var(--text);font-weight:700}
+.legal-table td{color:#cfd5e2}
+@media(max-width:600px){.legal-table th{width:112px;font-size:12px}.legal-table td{font-size:12.5px}}
+
+.faq-item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:10px}
+.faq-item summary{cursor:pointer;font-weight:700;font-size:14px;color:var(--text)}
+.faq-item .faq-body{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:#cfd5e2;line-height:1.7}
+.faq-item.subtle-faq{background:#14171d;border-color:#222630}
+.faq-item.subtle-faq summary{font-size:13px;color:var(--sub);font-weight:500}
+
+/* ---- 多段階解約確認フロー（ヘルプページ内） ---- */
+.quiet-link{background:none;border:none;padding:0;color:var(--sub);font-size:11.5px;text-decoration:underline;cursor:pointer;font-family:inherit;opacity:.75}
+.quiet-link:hover{opacity:1;color:var(--text)}
+.cancel-step{margin-top:14px;padding:14px 16px;background:#101318;border:1px solid var(--line);border-radius:12px}
+.cancel-step h3{font-size:14px;margin:0 0 8px;color:var(--text)}
+.cancel-loss-list{background:rgba(255,90,95,.08);border:1px solid rgba(255,90,95,.3);border-radius:10px;padding:10px 14px 10px 28px;margin:10px 0 14px;font-size:12.5px;color:#ffd4d6}
+.cancel-loss-list li{margin:4px 0}
+.reason-list label,.agree-checks label{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--text);margin:8px 0;cursor:pointer}
+.reason-list input,.agree-checks input{margin-top:4px;accent-color:var(--accent)}
+.retention-tip{background:rgba(53,194,138,.1);border:1px solid rgba(53,194,138,.35);border-radius:10px;padding:10px 12px;margin:10px 0;font-size:12.5px;color:var(--text)}
+.cancel-actions{display:flex;flex-direction:column;gap:10px;margin-top:14px;align-items:stretch}
+.quiet-next-btn{background:none;border:1px solid #2a2f3a;color:var(--sub);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;font-family:inherit}
+.quiet-next-btn:hover:not(:disabled){color:var(--text);border-color:#3d4454}
+.quiet-next-btn:disabled{opacity:.38;cursor:not-allowed}

@@ -22,12 +22,12 @@ window.BAM_CONFIG = {
   //    例: "https://ba-maker-license.your-subdomain.workers.dev"
   LICENSE_API_URL: "",
 
-  // 3. Stripe カスタマーポータル（契約確認・カード変更・解約手続きページ）のURL
+  // 3. Stripe カスタマーポータル（契約管理・解約手続きページ）のURL（※ヘルプページの多段階解約フロー最終ステップで使用）
   //    例: "https://billing.stripe.com/p/login/xxxxxxxx"
   CUSTOMER_PORTAL_URL: "",
 
-  // サポート・お問い合わせ先メールアドレス（Gmail＋GAS自動送信元と共通）
-  SUPPORT_EMAIL: "seitaimichibiki@gmail.com",
+  // 4. お問い合わせ窓口（公式LINEのみ・BtoB用アカウント）
+  LINE_CONTACT_URL: "https://lin.ee/XB6R3kS",
 
   // 1ライセンスあたりの同時利用端末上限（Worker側の MAX_DEVICES と揃える）
   MAX_DEVICES: 2,

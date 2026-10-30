@@ -12,11 +12,10 @@ BRAND_NAME = "BAメーカー"
 APP_URL = "https://seitaimichibiki-cpu.github.io/ba-maker/"
 ALLOWED_ORIGIN = "https://seitaimichibiki-cpu.github.io"
 MAX_DEVICES = "2"
-# Gmail（GAS経由）送信元およびサポート連絡先
+# Gmail（GAS経由）自動送信元アドレス（※送信専用）
 FROM_EMAIL = "BAメーカー <seitaimichibiki@gmail.com>"
-SUPPORT_EMAIL = "seitaimichibiki@gmail.com"
-# Stripeカスタマーポータルのリンク（設定すると解約・カード変更案内をメールと管理画面に表示）
-CUSTOMER_PORTAL_URL = ""
+# お問い合わせ窓口（BtoB公式LINEのみ）
+LINE_CONTACT_URL = "https://lin.ee/XB6R3kS"
 
 # 機密キーは wrangler.toml に直接書かず、以下のコマンドで安全に登録してください：
 #   npx wrangler secret put GAS_WEBHOOK_URL
