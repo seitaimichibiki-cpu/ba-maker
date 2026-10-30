@@ -31,7 +31,7 @@
       <button id="btnRestart" class="btn small">⏮ 頭出し</button>
       <button id="btnPlay" class="btn small">⏸ 停止</button>
     </div>
-    <p class="hint">空いている枠をタップ（クリック）しても写真・動画を選べます。</p>
+    <p class="hint">空枠タップで写真・動画を選択 ／ 文字や写真はドラッグで位置調整できます。</p>
   </section>
 
   <!-- 操作パネル -->
@@ -67,7 +67,7 @@
 
       <label>補足の一文<input id="inSub" type="text" maxlength="40" placeholder="例：施術3回後の変化"></label>
 
-      <h3>デザイン</h3>
+      <h3>デザイン（自動保存）</h3>
       <div class="themes" id="themes"></div>
       <div id="customBox" class="custom-box">
         <label>背景<input type="color" id="cBg" value="#111111"></label>
@@ -78,6 +78,19 @@
         <button id="btnLogo" class="btn small">🔒 ロゴを追加（有料）</button>
         <input type="file" accept="image/*" id="fileLogo" hidden>
         <button id="btnLogoClear" class="btn tiny" hidden>ロゴ削除</button>
+      </div>
+
+      <h3>文字位置の調整（自動保存）</h3>
+      <p class="hint">プレビュー上の文字を直接指やマウスでドラッグしても上下・左右に動かせます。</p>
+      <div class="two">
+        <label class="slider">症状（上下）<input type="range" min="60" max="1860" step="1" value="125" id="posSymptomY"></label>
+        <label class="slider">年齢・属性（上下）<input type="range" min="60" max="1860" step="1" value="250" id="posAgeY"></label>
+        <label class="slider">院名（上下）<input type="range" min="60" max="1860" step="1" value="1590" id="posClinicY"></label>
+        <label class="slider">補足（上下）<input type="range" min="60" max="1860" step="1" value="1700" id="posSubY"></label>
+      </div>
+      <div>
+        <button id="btnCenterTextX" class="btn tiny">左右を中央に揃える</button>
+        <button id="btnResetTextPos" class="btn tiny">初期位置にリセット</button>
       </div>
 
       <h3>写真・動画の調整</h3>

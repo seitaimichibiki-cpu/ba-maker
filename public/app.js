@@ -21,16 +21,93 @@
     custom:{ name: "自由配色", pro: true,  bg: "#111111", text: "#ffffff", accent: "#ff5a5f" }
   };
 
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+  const TEXT_BASE = {
+    symptom: { x: LW / 2, y: 125,  slider: "posSymptomY" },
+    age:     { x: LW / 2, y: 250,  slider: "posAgeY" },
+    clinic:  { x: LW / 2, y: 1590, slider: "posClinicY" },
+    sub:     { x: LW / 2, y: 1700, slider: "posSubY" }
+  };
+  const newTextPos = () => ({
+    symptom: { dx: 0, dy: 0 },
+    age:     { dx: 0, dy: 0 },
+    clinic:  { dx: 0, dy: 0 },
+    sub:     { dx: 0, dy: 0 }
+  });
+
   // ---------- 状態 ----------
   const newPanel = () => ({ type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0 });
   const state = {
     symptom: "", age: "", clinic: "", sub: "",
     theme: "dark",
+    preferredTheme: "dark",
     custom: { bg: "#111111", text: "#ffffff", accent: "#ff5a5f" },
+    textPos: newTextPos(),
     guide: false, playing: true, exporting: false,
     logo: null,
     panels: { before: newPanel(), after: newPanel() }
   };
+
+  function textXY(key) {
+    const b = TEXT_BASE[key], p = state.textPos[key];
+    return {
+      x: clamp(b.x + p.dx, 80, LW - 80),
+      y: clamp(b.y + p.dy, 60, LH - 60)
+    };
+  }
+  function syncTextSliders() {
+    Object.entries(TEXT_BASE).forEach(([k, b]) => {
+      const el = $(b.slider);
+      if (el) el.value = Math.round(textXY(k).y);
+    });
+  }
+
+  // ---------- 設定の保存・復元 ----------
+  const LS_SETTINGS = "bam_settings_v1";
+  const isHex = (v) => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
+
+  function saveSettings() {
+    try {
+      localStorage.setItem(LS_SETTINGS, JSON.stringify({
+        theme: state.preferredTheme || state.theme,
+        custom: state.custom,
+        textPos: state.textPos
+      }));
+    } catch (e) {}
+  }
+
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(LS_SETTINGS);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d && d.custom) {
+        if (isHex(d.custom.bg)) state.custom.bg = d.custom.bg;
+        if (isHex(d.custom.text)) state.custom.text = d.custom.text;
+        if (isHex(d.custom.accent)) state.custom.accent = d.custom.accent;
+      }
+      $("cBg").value = state.custom.bg;
+      $("cText").value = state.custom.text;
+      $("cAccent").value = state.custom.accent;
+      if (d && typeof d.theme === "string" && THEMES[d.theme]) {
+        state.preferredTheme = d.theme;
+        state.theme = THEMES[d.theme].pro && !pro ? "dark" : d.theme;
+      }
+      if (d && d.textPos) {
+        Object.keys(TEXT_BASE).forEach((k) => {
+          const tp = d.textPos[k], b = TEXT_BASE[k];
+          if (tp && typeof tp.dx === "number" && isFinite(tp.dx)) {
+            state.textPos[k].dx = clamp(Math.round(tp.dx), 80 - b.x, LW - 80 - b.x);
+          }
+          if (tp && typeof tp.dy === "number" && isFinite(tp.dy)) {
+            state.textPos[k].dy = clamp(Math.round(tp.dy), 60 - b.y, LH - 60 - b.y);
+          }
+        });
+      }
+    } catch (e) {}
+    syncTextSliders();
+  }
 
   // ---------- ライセンス ----------
   const LS_KEY = "bam_license";
@@ -55,7 +132,9 @@
     $("optHQ").textContent = pro ? "1080×1920（高画質）" : "🔒 1080×1920（有料）";
     $("btnLogo").textContent = pro ? "ロゴを追加" : "🔒 ロゴを追加（有料）";
     $("btnDeactivate").hidden = !pro;
-    if (!pro) {
+    if (pro && state.preferredTheme && THEMES[state.preferredTheme]) {
+      state.theme = state.preferredTheme;
+    } else if (!pro) {
       if (THEMES[state.theme].pro) state.theme = "dark";
       $("selQuality").value = "720";
       state.logo = null;
@@ -111,7 +190,10 @@
       b.innerHTML = `<div class="sw" style="background:${tt.bg}"><i style="background:${tt.accent}"></i></div><span>${t.pro && !pro ? "🔒" : ""}${t.name}</span>`;
       b.onclick = () => {
         if (t.pro && !requirePro(t.name + "テーマ")) return;
-        state.theme = key; renderThemes();
+        state.theme = key;
+        state.preferredTheme = key;
+        saveSettings();
+        renderThemes();
       };
       box.appendChild(b);
     });
@@ -184,6 +266,8 @@
   }
 
   // ---------- メイン描画（preview / export 共通） ----------
+  const textBoxes = { symptom: null, age: null, clinic: null, sub: null };
+
   function render(c, W, H, opt) {
     opt = opt || {};
     const th = theme();
@@ -194,25 +278,7 @@
     // 背景
     c.fillStyle = th.bg; c.fillRect(0, 0, LW, LH);
 
-    // 上部：症状・年齢
-    c.textAlign = "center"; c.textBaseline = "middle";
-    const symptom = state.symptom || (opt.preview ? "症状を入力" : "");
-    if (symptom) {
-      c.fillStyle = state.symptom ? th.text : "rgba(160,160,160,0.7)";
-      fit(c, symptom, 960, 132, 52, 900);
-      c.fillText(symptom, LW / 2, 125);
-    }
-    const age = state.age || (opt.preview ? "年齢・属性" : "");
-    if (age) {
-      const sz = fit(c, age, 800, 64, 34, 700);
-      const tw = c.measureText(age).width + 80, ph = sz + 40;
-      c.fillStyle = state.age ? th.accent : "rgba(160,160,160,0.35)";
-      rr(c, (LW - tw) / 2, 250 - ph / 2 + 4, tw, ph, ph / 2); c.fill();
-      c.fillStyle = "#fff"; c.textAlign = "center"; c.textBaseline = "middle";
-      c.fillText(age, LW / 2, 254);
-    }
-
-    // 中央：左右比較
+    // 中央：左右比較（文字を写真上に重ねられるよう先に描画）
     const B = state.panels.before, A = state.panels.after;
     drawMedia(c, B, 0, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "BEFORE");
     drawMedia(c, A, PANEL_W + GAP, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "AFTER");
@@ -220,37 +286,87 @@
     badge(c, "BEFORE", 24, PANEL_Y + 24, "rgba(70,76,88,0.92)", "#fff");
     badge(c, "AFTER", PANEL_W + GAP + 24, PANEL_Y + 24, th.accent, "#fff");
 
-    // 下部：院名（ロゴは左）
+    // 上部テキスト：症状・年齢
+    c.textAlign = "center"; c.textBaseline = "middle";
+    const symptom = state.symptom || (opt.preview ? "症状を入力" : "");
+    if (symptom) {
+      const { x: sx, y: sy } = textXY("symptom");
+      c.fillStyle = state.symptom ? th.text : "rgba(160,160,160,0.7)";
+      const sz = fit(c, symptom, 960, 132, 52, 900);
+      c.fillText(symptom, sx, sy);
+      if (opt.preview) {
+        const tw = Math.max(240, c.measureText(symptom).width);
+        textBoxes.symptom = { x: sx - tw / 2 - 24, y: sy - sz / 2 - 20, w: tw + 48, h: sz + 40 };
+      }
+    } else if (opt.preview) {
+      textBoxes.symptom = null;
+    }
+
+    const age = state.age || (opt.preview ? "年齢・属性" : "");
+    if (age) {
+      const { x: ax, y: ay } = textXY("age");
+      const sz = fit(c, age, 800, 64, 34, 700);
+      const tw = c.measureText(age).width + 80, ph = sz + 40;
+      c.fillStyle = state.age ? th.accent : "rgba(160,160,160,0.35)";
+      rr(c, ax - tw / 2, ay - ph / 2 + 4, tw, ph, ph / 2); c.fill();
+      c.fillStyle = "#fff"; c.textAlign = "center"; c.textBaseline = "middle";
+      c.fillText(age, ax, ay + 4);
+      if (opt.preview) {
+        textBoxes.age = { x: ax - tw / 2 - 16, y: ay - ph / 2 - 12, w: tw + 32, h: ph + 24 };
+      }
+    } else if (opt.preview) {
+      textBoxes.age = null;
+    }
+
+    // 下部テキスト：院名（ロゴは左）・補足
     const clinic = state.clinic || (opt.preview ? "院名を入力" : "");
+    const { x: cx, y: cy } = textXY("clinic");
     if (clinic) {
       c.textAlign = "center"; c.textBaseline = "middle";
-      let cx = LW / 2, maxW = 960;
-      let logoW = 0, logoH = 0;
+      let maxW = 960, logoW = 0, logoH = 0;
       if (state.logo && pro) {
         logoH = 120; logoW = state.logo.naturalWidth / state.logo.naturalHeight * logoH;
         logoW = Math.min(logoW, 260); maxW = 960 - logoW - 30;
       }
-      fit(c, clinic, maxW, 88, 38, 900);
+      const sz = fit(c, clinic, maxW, 88, 38, 900);
       const tw = c.measureText(clinic).width;
       const total = tw + (logoW ? logoW + 30 : 0);
-      const left = (LW - total) / 2;
+      const left = cx - total / 2;
       if (logoW) {
         const lh = logoW / (state.logo.naturalWidth / state.logo.naturalHeight);
-        c.drawImage(state.logo, left, 1590 - lh / 2, logoW, lh);
+        c.drawImage(state.logo, left, cy - lh / 2, logoW, lh);
       }
       c.textAlign = "left";
       c.fillStyle = state.clinic ? th.text : "rgba(160,160,160,0.7)";
-      c.fillText(clinic, left + (logoW ? logoW + 30 : 0), 1592);
+      c.fillText(clinic, left + (logoW ? logoW + 30 : 0), cy + 2);
+      if (opt.preview) {
+        const bh = Math.max(sz + 36, logoW ? 130 : 96);
+        const bw = Math.max(240, total + 48);
+        textBoxes.clinic = { x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh };
+      }
     } else if (state.logo && pro) {
       const lh = 120, lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 400);
-      c.drawImage(state.logo, (LW - lw) / 2, 1590 - lh / 2, lw, lh);
+      c.drawImage(state.logo, cx - lw / 2, cy - lh / 2, lw, lh);
+      if (opt.preview) {
+        textBoxes.clinic = { x: cx - lw / 2 - 20, y: cy - lh / 2 - 16, w: lw + 40, h: lh + 32 };
+      }
+    } else if (opt.preview) {
+      textBoxes.clinic = null;
     }
+
     if (state.sub) {
+      const { x: sx, y: sy } = textXY("sub");
       c.textAlign = "center"; c.textBaseline = "middle";
       c.fillStyle = th.text; c.globalAlpha = 0.8;
-      fit(c, state.sub, 940, 48, 28, 500);
-      c.fillText(state.sub, LW / 2, 1700);
+      const sz = fit(c, state.sub, 940, 48, 28, 500);
+      c.fillText(state.sub, sx, sy);
       c.globalAlpha = 1;
+      if (opt.preview) {
+        const tw = Math.max(200, c.measureText(state.sub).width);
+        textBoxes.sub = { x: sx - tw / 2 - 24, y: sy - sz / 2 - 20, w: tw + 48, h: sz + 40 };
+      }
+    } else if (opt.preview) {
+      textBoxes.sub = null;
     }
 
     // 透かし（無料）
@@ -260,6 +376,26 @@
       c.fillStyle = th.text; c.globalAlpha = 0.5;
       c.fillText(CFG.WATERMARK_TEXT, LW / 2, 1868);
       c.globalAlpha = 1;
+    }
+
+    // 文字ドラッグ中のガイド線（プレビューのみ）
+    if (opt.preview && drag && drag.kind === "text") {
+      c.save();
+      if (state.textPos[drag.key].dx === 0) {
+        c.strokeStyle = "rgba(53,194,138,0.75)";
+        c.lineWidth = 3;
+        c.setLineDash([12, 10]);
+        c.beginPath(); c.moveTo(LW / 2, 0); c.lineTo(LW / 2, LH); c.stroke();
+      }
+      const tb = textBoxes[drag.key];
+      if (tb) {
+        c.strokeStyle = "rgba(255,255,255,0.65)";
+        c.lineWidth = 3;
+        c.setLineDash([10, 8]);
+        rr(c, tb.x, tb.y, tb.w, tb.h, 16);
+        c.stroke();
+      }
+      c.restore();
     }
 
     // 安全域ガイド（プレビューのみ）
@@ -352,15 +488,42 @@
     if (pt.y < PANEL_Y || pt.y > PANEL_Y + PANEL_H) return null;
     return pt.x < PANEL_W + GAP / 2 ? "before" : "after";
   }
+  function hitText(pt) {
+    let best = null, bestDist = Infinity;
+    for (const k of ["symptom", "age", "clinic", "sub"]) {
+      const b = textBoxes[k];
+      if (!b) continue;
+      if (pt.x >= b.x && pt.x <= b.x + b.w && pt.y >= b.y && pt.y <= b.y + b.h) {
+        const d = Math.abs(pt.y - (b.y + b.h / 2));
+        if (d < bestDist) { bestDist = d; best = k; }
+      }
+    }
+    return best;
+  }
   const pointers = new Map();
   let drag = null, pinch = null, tapStart = null;
 
   pv.addEventListener("pointerdown", (e) => {
+    const pt = logical(e);
     pv.setPointerCapture(e.pointerId);
-    pointers.set(e.pointerId, logical(e));
-    const which = hitPanel(logical(e));
-    if (pointers.size === 1) { drag = which ? { which, last: logical(e) } : null; pinch = null; }
-    else if (pointers.size === 2 && drag) {
+    pointers.set(e.pointerId, pt);
+    if (pointers.size === 1) {
+      const tKey = hitText(pt);
+      if (tKey) {
+        drag = {
+          kind: "text",
+          key: tKey,
+          last: pt,
+          rawDx: state.textPos[tKey].dx,
+          rawDy: state.textPos[tKey].dy,
+          moved: false
+        };
+      } else {
+        const which = hitPanel(pt);
+        drag = which ? { kind: "panel", which, last: pt } : null;
+      }
+      pinch = null;
+    } else if (pointers.size === 2 && drag && drag.kind === "panel") {
       const [a, b] = [...pointers.values()];
       pinch = { which: drag.which, dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: state.panels[drag.which].zoom };
     }
@@ -375,14 +538,33 @@
       return;
     }
     if (!drag) return;
+    if (drag.kind === "text") {
+      const b = TEXT_BASE[drag.key];
+      drag.rawDx = clamp(drag.rawDx + (pt.x - drag.last.x), 80 - b.x, LW - 80 - b.x);
+      drag.rawDy = clamp(drag.rawDy + (pt.y - drag.last.y), 60 - b.y, LH - 60 - b.y);
+      state.textPos[drag.key].dx = Math.abs(drag.rawDx) < 24 ? 0 : Math.round(drag.rawDx);
+      state.textPos[drag.key].dy = Math.round(drag.rawDy);
+      drag.last = pt;
+      drag.moved = true;
+      syncTextSliders();
+      return;
+    }
     const p = state.panels[drag.which];
     const { rx, ry } = panelRange(p, PANEL_W, PANEL_H);
     if (rx > 0) p.ox = clamp(p.ox + (pt.x - drag.last.x) / rx, -1, 1);
     if (ry > 0) p.oy = clamp(p.oy + (pt.y - drag.last.y) / ry, -1, 1);
     drag.last = pt;
   });
-  const endPtr = (e) => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; if (!pointers.size) drag = null; };
-  pv.addEventListener("pointerdown", (e) => { tapStart = logical(e); }, true);
+  const endPtr = (e) => {
+    if (drag && drag.kind === "text" && drag.moved && pointers.size <= 1) saveSettings();
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (!pointers.size) drag = null;
+  };
+  pv.addEventListener("pointerdown", (e) => {
+    const pt = logical(e);
+    tapStart = hitText(pt) ? null : pt;
+  }, true);
   pv.addEventListener("pointerup", (e) => {
     const pt = logical(e), which = hitPanel(pt);
     if (tapStart && which && pointers.size === 1 && !state.panels[which].el &&
@@ -403,7 +585,6 @@
     loadFile(which, e.dataTransfer.files[0]);
   });
 
-  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
   function setZoom(which, z) {
     const p = state.panels[which];
     p.zoom = clamp(z, 1, 3);
@@ -561,8 +742,26 @@
     };
 
     ["cBg", "cText", "cAccent"].forEach(id => $(id).addEventListener("input", (e) => {
-      state.custom[{ cBg: "bg", cText: "text", cAccent: "accent" }[id]] = e.target.value; renderThemes();
+      state.custom[{ cBg: "bg", cText: "text", cAccent: "accent" }[id]] = e.target.value;
+      saveSettings();
+      renderThemes();
     }));
+
+    Object.entries(TEXT_BASE).forEach(([k, b]) => {
+      $(b.slider).addEventListener("input", (e) => {
+        state.textPos[k].dy = clamp(parseInt(e.target.value, 10) || b.y, 60, LH - 60) - b.y;
+        saveSettings();
+      });
+    });
+    $("btnCenterTextX").onclick = () => {
+      Object.keys(TEXT_BASE).forEach((k) => { state.textPos[k].dx = 0; });
+      saveSettings();
+    };
+    $("btnResetTextPos").onclick = () => {
+      state.textPos = newTextPos();
+      syncTextSliders();
+      saveSettings();
+    };
 
     $("btnLogo").onclick = () => { if (requirePro("ロゴ挿入")) $("fileLogo").click(); };
     $("fileLogo").onchange = (e) => {
@@ -598,6 +797,7 @@
     $("btnDeactivate").onclick = () => { localStorage.removeItem(LS_KEY); pro = false; applyPlan(); $("keyMsg").textContent = "解除しました。"; };
   }
 
+  loadSettings();
   bind();
   initLicense();
   if (document.fonts && document.fonts.load) { document.fonts.load('900 40px "Noto Sans JP"'); }
