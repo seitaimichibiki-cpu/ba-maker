@@ -40,18 +40,24 @@
   const BGM = window.BAM_BGM;
   const MOTION = window.BAM_MOTION;
 
-  // iPad SafariでデコーダとVSyncを安定稼働させるためのオフスクリーン配置コンテナ
+  // iPad SafariでデコーダとVSyncをフル稼働させるためのビューポート内背面コンテナ（画面外-9999pxだとWebKitがフレーム供給を間引くため0,0に配置）
   const mediaPool = document.createElement("div");
   mediaPool.setAttribute("aria-hidden", "true");
-  mediaPool.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;overflow:hidden;opacity:0.001;pointer-events:none;z-index:-1";
+  mediaPool.style.cssText = "position:fixed;left:0;top:0;width:4px;height:4px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:-1";
   document.body.appendChild(mediaPool);
+
+  // WebKitのGPU（IOSurface / Metal VideoTextureCopierCV）最小加速サイズ（257x257超）を満たすウォームアップ専用キャンバス
+  const warmCanvas = document.createElement("canvas");
+  warmCanvas.width = 280;
+  warmCanvas.height = 280;
+  const warmCtx = warmCanvas.getContext("2d", { alpha: false });
 
   // ---------- 状態 ----------
   const newPanel = () => ({
     type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0,
     trimStart: 0, autoTrimSec: 0, autoDetected: false,
     scanning: false, scanId: 0, scanPromise: null, audioSrc: null,
-    holdCanvas: null, hasHold: false
+    holdCanvas: null, hasHold: false, warmed: false, warming: false
   });
   const state = {
     symptom: "", age: "", clinic: "", sub: "",
@@ -744,16 +750,20 @@
       const dy = y + (h - dh) / 2 + p.oy * ry;
       const useHold = p.type === "video" && p.hasHold &&
         !scrubbingTrim &&
-        (p.scanning || syncingVideos || p.el.seeking || p.el.readyState < 2);
+        (p.scanning || p.warming || syncingVideos || p.el.seeking || p.el.readyState < 2);
+      if (useHold && p.warming && p.el && p.el.readyState >= 2) {
+        // プレビュー本体のGPUコンテキストでも<video>→Metalテクスチャ変換を事前稼働させ、同一フレーム内でホールド画像により上書きする
+        try { ctx.drawImage(p.el, x, y, 32, 32); } catch (e) {}
+      }
       ctx.drawImage(useHold ? p.holdCanvas : p.el, dx, dy, dw, dh);
-      if (placeholder && p.scanning) {
+      if (placeholder && (p.scanning || p.warming)) {
         ctx.fillStyle = "rgba(0,0,0,0.58)";
         rr(ctx, x + 36, y + h / 2 - 44, w - 72, 88, 22);
         ctx.fill();
         ctx.fillStyle = "#fff";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.font = `700 30px ${FONT}`;
-        ctx.fillText("🚶 動き始めを解析中…", x + w / 2, y + h / 2 + 2);
+        ctx.fillText(p.scanning ? "🚶 動き始めを解析中…" : "▶ 再生を準備中…", x + w / 2, y + h / 2 + 2);
       }
     } else {
       ctx.fillStyle = "rgba(128,128,128,0.18)";
@@ -1011,6 +1021,8 @@
     if (!p) return;
     p.scanId++;
     p.scanning = false;
+    p.warming = false;
+    p.warmed = false;
     p.scanPromise = null;
     if (p.audioSrc) {
       try { p.audioSrc.disconnect(); } catch (e) {}
@@ -1085,8 +1097,40 @@
     refreshTrimUI();
   }
 
-  function seekTo(v, sec) {
+  function waitIdleSeek(v, maxMs) {
+    if (!v || !v.seeking) return Promise.resolve();
     return new Promise((res) => {
+      let done = false;
+      const f = () => { if (!done) { done = true; v.removeEventListener("seeked", f); res(); } };
+      v.addEventListener("seeked", f);
+      setTimeout(f, maxMs || 450);
+    });
+  }
+
+  function waitCanPlay(v, maxMs) {
+    if (!v || v.readyState >= 3) return Promise.resolve();
+    return new Promise((res) => {
+      let done = false;
+      const f = () => {
+        if (done) return;
+        done = true;
+        v.removeEventListener("canplay", f);
+        v.removeEventListener("canplaythrough", f);
+        res();
+      };
+      v.addEventListener("canplay", f);
+      v.addEventListener("canplaythrough", f);
+      setTimeout(f, maxMs || 750);
+    });
+  }
+
+  function pumpGpuFrame(v) {
+    if (!v || v.readyState < 2) return;
+    try { warmCtx.drawImage(v, 0, 0, 280, 280); } catch (e) {}
+  }
+
+  function seekTo(v, sec) {
+    return waitIdleSeek(v, 400).then(() => new Promise((res) => {
       const target = Math.max(0, sec || 0);
       if (Math.abs(v.currentTime - target) < 0.005 && !v.seeking && v.readyState >= 2) {
         res();
@@ -1096,65 +1140,202 @@
       const f = () => { if (!done) { done = true; v.removeEventListener("seeked", f); res(); } };
       v.addEventListener("seeked", f);
       try { v.currentTime = target; } catch (e) { f(); return; }
-      setTimeout(f, 600);
-    });
+      setTimeout(f, 650);
+    }));
   }
 
   /**
-   * 非キーフレーム位置からの再生開始時のカクつきを防ぐため、
-   * わずかに手前へシーク→無音で1〜2フレームだけ実再生してデコーダの順方向バッファを温め、
-   * シークせずに一時停止（ホットポーズ状態）で待機させる
+   * 無音再生しながら実際にデコード・提示されたフレーム数を監視し、
+   * 毎フレームGPUキャンバスへdrawImageしてAVPlayerItemVideoOutputとMetalテクスチャ経路を温める
    */
-  async function primeVideoForStart(p, targetSec, isCancelled) {
-    const v = p.el;
-    if (!v) return;
-    v.pause();
-    const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
-    const lead = targetSec >= 0.085 ? 0.08 : 0;
-    const preSec = clamp(targetSec - lead, 0, dur > 0.15 ? dur - 0.12 : 0);
-
-    await seekTo(v, preSec);
-    if (isCancelled && isCancelled()) { v.pause(); return; }
+  function playAndPumpFrames(v, opts, isCancelled) {
+    const minFrames = (opts && opts.minFrames) || 2;
+    const minAdvance = (opts && opts.minAdvance) || 0.05;
+    const timeoutMs = (opts && opts.timeoutMs) || 450;
+    const pauseAtEnd = !opts || opts.pauseAtEnd !== false;
 
     const prevMuted = v.muted;
     v.muted = true;
     const startCt = v.currentTime;
-    const goalAdvance = dur > 0 && (dur - startCt) < 0.1 ? 0.02 : (lead > 0 ? 0.07 : 0.05);
+    let lastRafCt = startCt;
+    let vfcFrames = 0;
+    let rafFrames = 0;
 
-    await new Promise((resolve) => {
+    return new Promise((resolve) => {
       let settled = false;
       let rafId = 0;
+      let vfcId = 0;
+      const hasRVFC = typeof v.requestVideoFrameCallback === "function";
+
       const done = () => {
         if (settled) return;
         settled = true;
+        clearTimeout(timer);
         if (rafId) cancelAnimationFrame(rafId);
-        try { v.pause(); } catch (e) {}
+        if (hasRVFC && vfcId && typeof v.cancelVideoFrameCallback === "function") {
+          try { v.cancelVideoFrameCallback(vfcId); } catch (e) {}
+        }
+        if (pauseAtEnd) {
+          try { v.pause(); } catch (e) {}
+        }
+        v.muted = prevMuted;
+        resolve({
+          frames: Math.max(vfcFrames, rafFrames),
+          advanced: Math.max(0, v.currentTime - startCt)
+        });
+      };
+
+      const isSatisfied = () => {
+        const frames = Math.max(vfcFrames, rafFrames);
+        const adv = v.currentTime - startCt;
+        return v.ended || (frames >= minFrames && adv >= minAdvance);
+      };
+
+      const timer = setTimeout(done, timeoutMs);
+
+      const onVfc = () => {
+        if (settled) return;
+        vfcFrames++;
+        pumpGpuFrame(v);
+        if ((isCancelled && isCancelled()) || isSatisfied()) {
+          done();
+          return;
+        }
+        vfcId = v.requestVideoFrameCallback(onVfc);
+      };
+
+      const onRaf = () => {
+        if (settled) return;
+        if (isCancelled && isCancelled()) {
+          done();
+          return;
+        }
+        const ct = v.currentTime;
+        if (Math.abs(ct - lastRafCt) >= 0.014) {
+          lastRafCt = ct;
+          rafFrames++;
+          if (!vfcFrames) pumpGpuFrame(v);
+        }
+        if (isSatisfied()) {
+          done();
+          return;
+        }
+        rafId = requestAnimationFrame(onRaf);
+      };
+
+      const startWatchers = () => {
+        if (settled) return;
+        if (hasRVFC) vfcId = v.requestVideoFrameCallback(onVfc);
+        rafId = requestAnimationFrame(onRaf);
+      };
+
+      const pPlay = v.play();
+      if (pPlay && typeof pPlay.then === "function") {
+        pPlay.then(startWatchers).catch(done);
+      } else {
+        startWatchers();
+      }
+    });
+  }
+
+  /**
+   * play()直後、実際に最初のライブフレームが出力されて映像ストリームが走り出すまで待機する
+   */
+  function waitLivePlaybackFrame(v, prevCt, maxWaitMs, isCancelled) {
+    if (!v) return Promise.resolve();
+    return new Promise((resolve) => {
+      let settled = false;
+      let rafId = 0;
+      let vfcId = 0;
+      const hasRVFC = typeof v.requestVideoFrameCallback === "function";
+
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (rafId) cancelAnimationFrame(rafId);
+        if (hasRVFC && vfcId && typeof v.cancelVideoFrameCallback === "function") {
+          try { v.cancelVideoFrameCallback(vfcId); } catch (e) {}
+        }
+        pumpGpuFrame(v);
         resolve();
       };
-      const timer = setTimeout(done, 300);
+
+      const timer = setTimeout(done, maxWaitMs || 220);
+
+      if (hasRVFC) {
+        vfcId = v.requestVideoFrameCallback(() => done());
+      }
       const check = () => {
         if (settled) return;
-        if ((isCancelled && isCancelled()) || v.ended || (v.currentTime - startCt) >= goalAdvance) {
-          clearTimeout(timer);
+        if ((isCancelled && isCancelled()) || v.ended || (v.currentTime - prevCt) >= 0.014) {
           done();
           return;
         }
         rafId = requestAnimationFrame(check);
       };
-      const pPlay = v.play();
-      if (pPlay && typeof pPlay.then === "function") {
-        pPlay.then(() => {
-          if (!settled) rafId = requestAnimationFrame(check);
-        }).catch(() => {
-          clearTimeout(timer);
-          done();
-        });
-      } else {
-        rafId = requestAnimationFrame(check);
-      }
+      rafId = requestAnimationFrame(check);
     });
+  }
 
-    v.muted = prevMuted;
+  /**
+   * 1周目（初回再生）のみ発生するWebKitのAVPlayerItemVideoOutput接続・Metalシェーダ初期化・
+   * デコーダ先読みバッファ空欠によるカクつきを防ぐため、初回は非表示のまま7フレーム以上実再生＋GPU転送を行い、
+   * 2周目以降のループ再生と完全に同じ「温まった状態」を作ってからホットポーズで待機させる
+   */
+  async function primeVideoForStart(p, targetSec, isCancelled) {
+    const v = p.el;
+    if (!v) return;
+    v.pause();
+    await waitIdleSeek(v, 450);
+    if (isCancelled && isCancelled()) return;
+
+    if (!p.warmed) {
+      p.warming = true;
+      try {
+        await waitCanPlay(v, 800);
+        if (isCancelled && isCancelled()) return;
+
+        await seekTo(v, targetSec);
+        if (isCancelled && isCancelled()) return;
+        pumpGpuFrame(v);
+        captureHoldFrame(p);
+
+        const dur0 = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+        const avail = dur0 > 0 ? Math.max(0.06, dur0 - targetSec - 0.05) : 0.3;
+        const warmAdvance = Math.min(0.24, avail * 0.7);
+        const warmRes = await playAndPumpFrames(v, {
+          minFrames: warmAdvance >= 0.18 ? 7 : 3,
+          minAdvance: warmAdvance,
+          timeoutMs: 950,
+          pauseAtEnd: true
+        }, isCancelled);
+        if (isCancelled && isCancelled()) { v.pause(); return; }
+        if (warmRes.frames >= 3 || warmRes.advanced >= 0.1) {
+          p.warmed = true;
+        }
+      } finally {
+        p.warming = false;
+      }
+    }
+
+    const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+    const lead = targetSec >= 0.11 ? 0.10 : 0;
+    const preSec = clamp(targetSec - lead, 0, dur > 0.15 ? dur - 0.12 : 0);
+
+    await seekTo(v, preSec);
+    if (isCancelled && isCancelled()) { v.pause(); return; }
+    await waitCanPlay(v, 350);
+    if (isCancelled && isCancelled()) { v.pause(); return; }
+
+    const startCt = v.currentTime;
+    const goalAdvance = dur > 0 && (dur - startCt) < 0.12 ? 0.02 : (lead > 0 ? 0.085 : 0.045);
+    await playAndPumpFrames(v, {
+      minFrames: lead > 0 ? 3 : 2,
+      minAdvance: goalAdvance,
+      timeoutMs: 450,
+      pauseAtEnd: true
+    }, isCancelled);
   }
 
   function autoDetectPanel(which) {
@@ -1217,6 +1398,22 @@
     const isVideo = file.type.startsWith("video/");
     const isImage = file.type.startsWith("image/");
     if (!isVideo && !isImage) { setMsg("画像または動画ファイルを選んでください。", "err"); return; }
+
+    // 新しい動画のデコーダ確保前に、既存パネルの旧デコーダ解放と他動画の一時停止を行って同時デコーダ競合を防ぐ
+    if (isVideo) {
+      clearLoopTimer();
+      syncToken++;
+      videos().forEach(vp => {
+        if (!vp.scanning && !vp.warming && vp.el && !vp.el.seeking) captureHoldFrame(vp);
+        if (vp.el) vp.el.pause();
+      });
+      if (p.el) {
+        destroyPanelMedia(p);
+        Object.assign(p, newPanel());
+        refreshPick();
+      }
+    }
+
     const url = URL.createObjectURL(file);
     const done = (el, type) => {
       destroyPanelMedia(p);
@@ -1224,9 +1421,12 @@
         type, el, url, name: file.name, zoom: 1, ox: 0, oy: 0,
         trimStart: 0, autoTrimSec: 0, autoDetected: false,
         scanning: false, scanPromise: null, audioSrc: null,
-        holdCanvas: null, hasHold: false
+        holdCanvas: null, hasHold: false, warmed: false, warming: false
       });
-      if (type === "video") captureHoldFrame(p);
+      if (type === "video") {
+        pumpGpuFrame(el);
+        captureHoldFrame(p);
+      }
       $("zoom" + cap(which)).value = 1;
       refreshPick();
       setMsg("");
@@ -1236,6 +1436,8 @@
         } else {
           restartVideos();
         }
+      } else if (videos().length) {
+        restartVideos();
       }
     };
     if (isVideo) {
@@ -1245,11 +1447,18 @@
       v.setAttribute("webkit-playsinline", "");
       mediaPool.appendChild(v);
       v.ondurationchange = () => refreshTrimUI();
-      v.onloadeddata = () => done(v, "video");
+      let loadedOnce = false;
+      v.onloadeddata = () => {
+        if (loadedOnce) return;
+        loadedOnce = true;
+        v.onloadeddata = null;
+        done(v, "video");
+      };
       v.onerror = () => {
-        try { v.removeAttribute("src"); v.load(); v.remove(); } catch (e) {}
+        try { v.onloadeddata = null; v.removeAttribute("src"); v.load(); v.remove(); } catch (e) {}
         URL.revokeObjectURL(url);
         setMsg("この動画は読み込めませんでした（形式を確認してください）。", "err");
+        if (videos().length) restartVideos();
       };
       v.src = url;
     } else {
@@ -1308,8 +1517,9 @@
 
     if (cancelled()) { abortCleanly(); return; }
     if (state.playing) {
+      const startCts = vids.map(p => (p.el ? p.el.currentTime : 0));
       await Promise.all(vids.map(p => p.el.play().catch(() => {})));
-      await nextFrame();
+      await Promise.all(vids.map((p, idx) => waitLivePlaybackFrame(p.el, startCts[idx], 220, cancelled)));
     }
     if (cancelled()) { abortCleanly(); return; }
     syncingVideos = false;
@@ -1590,10 +1800,12 @@
       render(cctx, w, h, {});
       pctx.drawImage(cv, 0, 0, pv.width, pv.height);
 
-      // プリロール済みのホットポーズ状態から全動画を先に再生開始し、1フレーム進めてから録画開始
+      // プリロール済みのホットポーズ状態から全動画を先に再生開始し、実際に初フレームが流れ出してから録画開始
       if (vids.length) {
+        const startCts = vids.map(p => (p.el ? p.el.currentTime : 0));
         await Promise.all(vids.map(p => p.el.play().catch(() => {})));
-        await nextFrame();
+        await Promise.all(vids.map((p, idx) => waitLivePlaybackFrame(p.el, startCts[idx], 220, () => false)));
+        render(cctx, w, h, {});
       }
       if (wantBgm && audioCtx && dest) {
         bgmRec = BGM.start(audioCtx, dest, {

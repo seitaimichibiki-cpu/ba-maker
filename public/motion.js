@@ -172,7 +172,7 @@
         v.muted = true;
         v.playsInline = true;
         v.preload = "auto";
-        v.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0.001;pointer-events:none";
+        v.style.cssText = "position:fixed;left:0;top:0;width:4px;height:4px;opacity:0.01;pointer-events:none;z-index:-1";
         document.body.appendChild(v);
       } else {
         try { v.pause(); } catch (e) {}
@@ -271,6 +271,14 @@
             detected = tStart < 0.2 ? 0 : tStart;
           }
 
+          if (reuseVideo && v.seeking) {
+            await new Promise((r) => {
+              let d = false;
+              const f = () => { if (!d) { d = true; v.removeEventListener("seeked", f); r(); } };
+              v.addEventListener("seeked", f);
+              setTimeout(f, 300);
+            });
+          }
           clearTimeout(hardTimer);
           const safeTrim = Math.min(detected, Math.max(0, Math.round((dur - 0.6) * 10) / 10));
           cleanup(safeTrim);
