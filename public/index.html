@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
@@ -213,12 +213,19 @@
       </div>
     </div>
 
-    <!-- 有料プラン認証済み時の表示：契約状態・2台枠・端末解除・解約導線 -->
+    <!-- 有料プラン認証済み時の表示：契約状態・2台目用キーコピー・2台枠・端末解除・解約導線 -->
     <div id="modalProView" hidden>
       <h2>⭐ 有料プラン（ご利用中）</h2>
       <div class="pro-status-card">
         <div class="pro-kv"><span>現在の状態</span><strong id="proStatusBadge" class="pro-active-pill">有効（認証済み）</strong></div>
-        <div class="pro-kv"><span>ライセンスキー</span><code id="proKeyMasked">BAM-••••</code></div>
+        <div class="pro-kv">
+          <span>ライセンスキー<small class="pro-kv-sub">2台目の端末登録用</small></span>
+          <div class="pro-key-actions">
+            <code id="proKeyMasked">BAM-••••</code>
+            <button type="button" id="btnToggleKey" class="btn tiny">表示</button>
+            <button type="button" id="btnCopyKey" class="btn tiny">📋 コピー</button>
+          </div>
+        </div>
         <div class="pro-kv"><span>登録端末数</span><strong id="proDeviceInfo">1 / 2 台（最大2台まで）</strong></div>
         <p id="proSubNote" class="pro-sub-note" hidden></p>
       </div>
@@ -241,9 +248,9 @@
   </div>
 </div>
 
-<script src="config.js?v=7"></script>
-<script src="bgm.js?v=7"></script>
-<script src="motion.js?v=7"></script>
-<script src="app.js?v=7"></script>
+<script src="config.js?v=8"></script>
+<script src="bgm.js?v=8"></script>
+<script src="motion.js?v=8"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

@@ -225,7 +225,7 @@ async function issueOrGetLicense(env, { sessionId, customerId, subscriptionId, e
   return record;
 }
 
-// ---------- 自動メール送信（Resend / SendGrid 両対応） ----------
+// ---------- 自動メール送信（Gmail+GAS / Resend / SendGrid 対応） ----------
 function escapeHtml(s) {
   return String(s || "")
     .replace(/&/g, "&amp;")
@@ -242,6 +242,7 @@ async function sendLicenseEmail(env, record) {
   const activateUrl = `${baseAppUrl}${sep}?key=${encodeURIComponent(record.key)}`;
   const maxDev = getMaxDevices(env, record);
   const portalUrl = String(env.CUSTOMER_PORTAL_URL || "").trim();
+  const supportEmail = String(env.SUPPORT_EMAIL || "seitaimichibiki@gmail.com").trim();
 
   const subject = `【${brand}】有料プランのライセンスキーをお届けします`;
 
@@ -257,9 +258,10 @@ async function sendLicenseEmail(env, record) {
     "",
     "【ご利用ルール】",
     `・1契約につき最大 ${maxDev}台 の端末（例：院のiPad＋パソコン等）でご利用いただけます。`,
-    "・機種変更や別の端末へ切り替える際は、画面右上の「プラン・端末管理」から「この端末のライセンスを解除」を押すと枠が空きます。",
+    "・機種変更や別の端末へ切り替える際は、画面右上の「プラン・端末管理」から「この端末のライセンスを解除する」を押すと枠が空きます。",
     "・サブスクリプションを解約された場合、契約期間終了後に自動的に無料プランへ戻ります。",
     portalUrl ? `\n▼ ご契約確認・カード変更・解約手続きはこちら\n${portalUrl}` : "",
+    supportEmail ? `\nお問い合わせ：${supportEmail}` : "",
     "",
     `今後とも ${brand} をよろしくお願いいたします。`
   ].filter((line, idx, arr) => !(line === "" && arr[idx - 1] === "")).join("\n");
@@ -277,13 +279,48 @@ async function sendLicenseEmail(env, record) {
   </div>
   <ul style="font-size:14px;color:#444;padding-left:20px;margin:16px 0">
     <li>1契約につき<strong>最大 ${maxDev}台 まで</strong>同時登録できます（例：iPad＋PC）。</li>
-    <li>端末を入れ替える際は、アプリ画面右上の<strong>「プラン・端末管理」→「この端末のライセンスを解除」</strong>で枠を空けられます。</li>
+    <li>端末を入れ替える際は、アプリ画面右上の<strong>「プラン・端末管理」→「この端末のライセンスを解除する」</strong>で枠を空けられます。</li>
     <li>解約された場合は自動でライセンスが停止し、無料プランへ戻ります。</li>
   </ul>
   ${portalUrl ? `<p style="font-size:13px;color:#666;margin-top:20px">ご契約内容の確認・お支払い方法の変更・解約手続き：<br><a href="${escapeHtml(portalUrl)}" style="color:#ff5a5f">${escapeHtml(portalUrl)}</a></p>` : ""}
+  ${supportEmail ? `<p style="font-size:12px;color:#888;margin-top:16px;border-top:1px solid #eee;padding-top:12px">お問い合わせ：<a href="mailto:${escapeHtml(supportEmail)}" style="color:#666">${escapeHtml(supportEmail)}</a></p>` : ""}
 </div>`.trim();
 
-  const fromEmail = env.FROM_EMAIL || "BAメーカー <noreply@example.com>";
+  // 1. 独自ドメイン不要：Gmail ＋ Google Apps Script（GAS）経由で自動送信
+  if (env.GAS_WEBHOOK_URL) {
+    const gasSecret = String(env.GAS_EMAIL_SECRET || env.ADMIN_SECRET || "").trim();
+    let resp = await fetch(String(env.GAS_WEBHOOK_URL).trim(), {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        secret: gasSecret,
+        to: record.email,
+        subject,
+        text: textBody,
+        html: htmlBody,
+        senderName: brand,
+        replyTo: supportEmail
+      }),
+      redirect: "manual"
+    });
+    // GAS Webアプリの302リダイレクト（script.googleusercontent.com）をGETで追跡して結果JSONを取得
+    if (resp.status >= 300 && resp.status < 400) {
+      const loc = resp.headers.get("Location");
+      if (loc) {
+        resp = await fetch(loc, { method: "GET" });
+      }
+    }
+    const rawText = await resp.text();
+    let gasJson = null;
+    try { gasJson = JSON.parse(rawText); } catch (e) {}
+    if (!resp.ok || !gasJson || gasJson.ok !== true) {
+      console.error("GAS email error:", resp.status, rawText.slice(0, 300));
+      return { sent: false, reason: (gasJson && gasJson.error) ? `gas_${gasJson.error}` : `gas_${resp.status}` };
+    }
+    return { sent: true, provider: "gmail_gas" };
+  }
+
+  const fromEmail = env.FROM_EMAIL || `BAメーカー <${supportEmail}>`;
 
   if (env.RESEND_API_KEY) {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -337,7 +374,7 @@ async function sendLicenseEmail(env, record) {
     return { sent: true, provider: "sendgrid" };
   }
 
-  console.warn("No email provider secret (RESEND_API_KEY / SENDGRID_API_KEY) configured.");
+  console.warn("No email provider secret (GAS_WEBHOOK_URL / RESEND_API_KEY / SENDGRID_API_KEY) configured.");
   return { sent: false, reason: "no_provider" };
 }
 
@@ -689,6 +726,15 @@ export default {
         record.devices = [];
         await saveLicenseRecord(env, record);
         return jsonResp({ ok: true, record }, 200, env, request);
+      }
+      if (action === "resend") {
+        if (body.email) record.email = String(body.email).trim();
+        const mailRes = await sendLicenseEmail(env, record);
+        if (mailRes.sent) {
+          record.emailSentAt = new Date().toISOString();
+          await saveLicenseRecord(env, record);
+        }
+        return jsonResp({ ok: true, record, emailResult: mailRes }, 200, env, request);
       }
 
       return jsonResp({ ok: false, error: "Unknown action" }, 400, env, request);

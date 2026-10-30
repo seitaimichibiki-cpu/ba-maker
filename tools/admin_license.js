@@ -28,6 +28,7 @@ function usage() {
     "  issue [email] [note]      手動でライセンスキーを発行（email指定時は自動メール送信）",
     "  get <KEY>                 キーの状態・登録端末（最大2台）を確認",
     "  reset-devices <KEY>       登録端末（2台枠）をすべてリセット（機種変更・紛失対応）",
+    "  resend <KEY> [email]      ライセンスメールを再送（メアド修正時は第2引数に新アドレス指定）",
     "  revoke <KEY>              キーを即時無効化（無料プランへ強制切り戻し）",
     "  reactivate <KEY>          無効化したキーを再度有効化"
   ].join("\n"));
@@ -49,6 +50,7 @@ const cmdMap = {
   "get": "get",
   "revoke": "revoke",
   "reactivate": "reactivate",
+  "resend": "resend",
   "reset-devices": "reset_devices",
   "reset_devices": "reset_devices"
 };
@@ -74,6 +76,7 @@ async function main() {
       process.exit(1);
     }
     payload = { action, key: arg1 };
+    if (action === "resend" && arg2) payload.email = arg2;
   }
 
   const res = await fetch(`${workerUrl}/api/admin`, {

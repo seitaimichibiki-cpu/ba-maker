@@ -26,6 +26,9 @@ window.BAM_CONFIG = {
   //    例: "https://billing.stripe.com/p/login/xxxxxxxx"
   CUSTOMER_PORTAL_URL: "",
 
+  // サポート・お問い合わせ先メールアドレス（Gmail＋GAS自動送信元と共通）
+  SUPPORT_EMAIL: "seitaimichibiki@gmail.com",
+
   // 1ライセンスあたりの同時利用端末上限（Worker側の MAX_DEVICES と揃える）
   MAX_DEVICES: 2,
 

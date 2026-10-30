@@ -220,6 +220,7 @@
   let pro = false;
   let licMeta = null;
   let verifyInFlight = null;
+  let showFullKey = false;
 
   const normKey = (k) => String(k || "").trim().toUpperCase().replace(/\s+/g, "");
   const apiBase = () => String(CFG.LICENSE_API_URL || "").trim().replace(/\/+$/, "");
@@ -276,6 +277,7 @@
   function clearLocalLicense() {
     licMeta = null;
     pro = false;
+    showFullKey = false;
     try {
       localStorage.removeItem(LS_KEY);
       localStorage.removeItem(LS_LIC_META);
@@ -338,10 +340,16 @@
     if (pro) {
       const maxD = (licMeta && licMeta.maxDevices) || CFG.MAX_DEVICES || 2;
       const curD = (licMeta && licMeta.deviceCount) || 1;
+      const rawSaved = normKey(localStorage.getItem(LS_KEY) || "");
       $("proStatusBadge").textContent = (licMeta && licMeta.cancelAtPeriodEnd)
         ? "有効（期間終了で自動解約）"
         : "有効（認証済み）";
-      $("proKeyMasked").textContent = (licMeta && licMeta.maskedKey) || maskKeyLocal(localStorage.getItem(LS_KEY) || "");
+      $("proKeyMasked").textContent = (showFullKey && rawSaved)
+        ? rawSaved
+        : ((licMeta && licMeta.maskedKey) || maskKeyLocal(rawSaved));
+      $("btnToggleKey").textContent = showFullKey ? "隠す" : "表示";
+      $("btnToggleKey").hidden = !rawSaved;
+      $("btnCopyKey").hidden = !rawSaved;
       $("proDeviceInfo").textContent = `${curD} / ${maxD} 台（最大${maxD}台まで）`;
 
       const subNote = $("proSubNote");
@@ -356,14 +364,18 @@
       }
 
       const portal = $("btnPortal");
+      const supMail = String(CFG.SUPPORT_EMAIL || "").trim();
       if (CFG.CUSTOMER_PORTAL_URL) {
         portal.href = CFG.CUSTOMER_PORTAL_URL;
         portal.hidden = false;
-        $("portalNote").textContent = "Stripeの契約管理ページでお支払い方法の変更・解約手続きが行えます。";
+        $("portalNote").textContent = "Stripeの契約管理ページでお支払い方法の変更・解約手続きが行えます" +
+          (supMail ? `（お問い合わせ：${supMail}）。` : "。");
       } else {
         portal.removeAttribute("href");
         portal.hidden = true;
-        $("portalNote").textContent = "ご契約の確認・解約は、購入完了メール内のリンクからお手続きいただけます。";
+        $("portalNote").textContent = supMail
+          ? `ご契約の確認・解約は、購入完了メール内のリンク、または ${supMail} までご連絡ください。`
+          : "ご契約の確認・解約は、購入完了メール内のリンクからお手続きいただけます。";
       }
     }
   }
@@ -658,7 +670,44 @@
   }
 
   // ---------- モーダル ----------
+  async function copySavedLicenseKey() {
+    const rawSaved = normKey(localStorage.getItem(LS_KEY) || "");
+    const msgEl = $("proMsg");
+    if (!rawSaved) return;
+    let copied = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(rawSaved);
+        copied = true;
+      }
+    } catch (e) {}
+    if (!copied) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = rawSaved;
+        ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;left:0;top:0;opacity:0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, rawSaved.length);
+        copied = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch (e) {}
+    }
+    if (copied) {
+      msgEl.textContent = "📋 ライセンスキーをコピーしました（2台目の端末で貼り付けて有効化できます）。";
+      msgEl.className = "msg ok";
+    } else {
+      showFullKey = true;
+      syncModalView();
+      msgEl.textContent = "キーを表示しました。長押しまたは選択してコピーしてください。";
+      msgEl.className = "msg";
+    }
+  }
+
   function openModal(reason) {
+    showFullKey = false;
     syncModalView();
     const reasonEl = $("modalReason");
     if (reason && !pro) {
@@ -2058,6 +2107,11 @@
     $("inKey").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); doActivate(); }
     });
+    $("btnToggleKey").onclick = () => {
+      showFullKey = !showFullKey;
+      syncModalView();
+    };
+    $("btnCopyKey").onclick = copySavedLicenseKey;
     $("btnDeactivate").onclick = deactivateCurrentDevice;
   }
 
