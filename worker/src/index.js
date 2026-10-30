@@ -565,8 +565,8 @@ export default {
             const itemPeriodEnd = obj.items && obj.items.data && obj.items.data[0] && obj.items.data[0].current_period_end;
             record.status = mapped.status;
             record.revokedReason = mapped.reason;
-            record.cancelAtPeriodEnd = !!obj.cancel_at_period_end;
-            record.currentPeriodEnd = obj.current_period_end || itemPeriodEnd || null;
+            record.cancelAtPeriodEnd = Boolean(obj.cancel_at_period_end || obj.cancel_at);
+            record.currentPeriodEnd = obj.cancel_at || obj.current_period_end || itemPeriodEnd || null;
           }
           await saveLicenseRecord(env, record);
         }

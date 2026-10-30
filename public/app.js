@@ -77,6 +77,17 @@
   let scrubbingTrim = false;
   let syncingVideos = false;
   let syncToken = 0;
+  let logoUrl = null;
+
+  function clearLogo() {
+    if (logoUrl) {
+      URL.revokeObjectURL(logoUrl);
+      logoUrl = null;
+    }
+    state.logo = null;
+    const btn = $("btnLogoClear");
+    if (btn) btn.hidden = true;
+  }
 
   function stopBgmPreview() {
     if (bgmPreview) {
@@ -401,8 +412,7 @@
     } else {
       if (THEMES[state.theme].pro) state.theme = "dark";
       $("selQuality").value = "720";
-      state.logo = null;
-      $("btnLogoClear").hidden = true;
+      clearLogo();
     }
 
     const lim = pro ? CFG.LIMITS.pro : CFG.LIMITS.free;
@@ -889,7 +899,7 @@
     if (clinic) {
       c.textAlign = "center"; c.textBaseline = "middle";
       let maxW = 960, logoW = 0, logoH = 0;
-      if (state.logo && pro) {
+      if (state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0) {
         logoH = 120; logoW = state.logo.naturalWidth / state.logo.naturalHeight * logoH;
         logoW = Math.min(logoW, 260); maxW = 960 - logoW - 30;
       }
@@ -910,7 +920,7 @@
         const bw = Math.max(240, total + 48);
         textBoxes.clinic = { x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh };
       }
-    } else if (state.logo && pro) {
+    } else if (state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0) {
       const lh = 120, lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 400);
       clinicHalfH = 60;
       c.drawImage(state.logo, cx - lw / 2, cy - lh / 2, lw, lh);
@@ -2047,12 +2057,30 @@
 
     $("btnLogo").onclick = () => { if (requirePro("ロゴ挿入")) $("fileLogo").click(); };
     $("fileLogo").onchange = (e) => {
-      const f = e.target.files[0]; if (!f) return;
+      const f = e.target.files[0]; e.target.value = "";
+      if (!f) return;
+      if (!f.type.startsWith("image/")) { setMsg("ロゴには画像ファイルを選んでください。", "err"); return; }
+      const nextUrl = URL.createObjectURL(f);
       const img = new Image();
-      img.onload = () => { state.logo = img; $("btnLogoClear").hidden = false; };
-      img.src = URL.createObjectURL(f); e.target.value = "";
+      img.onload = () => {
+        if (!img.naturalWidth || !img.naturalHeight) {
+          URL.revokeObjectURL(nextUrl);
+          setMsg("このロゴ画像はサイズを取得できませんでした（PNGまたはJPEGをお試しください）。", "err");
+          return;
+        }
+        if (logoUrl) URL.revokeObjectURL(logoUrl);
+        logoUrl = nextUrl;
+        state.logo = img;
+        $("btnLogoClear").hidden = false;
+        setMsg("");
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(nextUrl);
+        setMsg("このロゴ画像は読み込めませんでした。", "err");
+      };
+      img.src = nextUrl;
     };
-    $("btnLogoClear").onclick = () => { state.logo = null; $("btnLogoClear").hidden = true; };
+    $("btnLogoClear").onclick = clearLogo;
 
     $("selQuality").onchange = (e) => { if (e.target.value === "1080" && !requirePro("1080×1920 高画質")) e.target.value = "720"; };
 
