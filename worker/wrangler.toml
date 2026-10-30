@@ -1,0 +1,24 @@
+name = "ba-maker-license"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# 1. `npx wrangler kv namespace create LICENSES` を実行し、表示された id に書き換えてください
+[[kv_namespaces]]
+binding = "LICENSES"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[vars]
+BRAND_NAME = "BAメーカー"
+APP_URL = "https://seitaimichibiki-cpu.github.io/ba-maker/"
+ALLOWED_ORIGIN = "https://seitaimichibiki-cpu.github.io"
+MAX_DEVICES = "2"
+# 独自ドメインの送信元メールアドレス（例: "BAメーカー <noreply@example.com>"）
+FROM_EMAIL = "BAメーカー <noreply@example.com>"
+# Stripeカスタマーポータルのリンク（任意：設定すると解約・カード変更案内をメールと管理画面に表示）
+CUSTOMER_PORTAL_URL = ""
+
+# 機密キーは wrangler.toml に直接書かず、以下のコマンドで安全に登録してください：
+#   npx wrangler secret put STRIPE_WEBHOOK_SECRET
+#   npx wrangler secret put STRIPE_SECRET_KEY
+#   npx wrangler secret put RESEND_API_KEY
+#   npx wrangler secret put ADMIN_SECRET

@@ -119,4 +119,27 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 .trim-btns{display:flex;gap:4px;flex-wrap:wrap}
 .trim-btns .btn.tiny{margin:0;padding:4px 8px}
 
+/* ---- 無料／有料プラン明確分離UI ---- */
+[hidden]{display:none !important}
+.plan-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:8px 12px;border-radius:10px;margin-bottom:10px;font-size:12px;font-weight:700}
+.plan-bar.free{background:#12151b;border:1px dashed #3a4150;color:var(--sub)}
+.plan-bar.free .btn.tiny{margin:0;border-color:#f5c04a;color:#f5c04a;background:#221d10}
+.plan-bar.pro{background:rgba(245,192,74,.12);border:1px solid rgba(245,192,74,.45);color:#f5c04a}
 
+.modal-reason{background:rgba(255,90,95,.14);border:1px solid rgba(255,90,95,.45);color:#ffb3b6;
+  padding:8px 12px;border-radius:10px;font-size:13px;font-weight:700;margin:8px 0 10px}
+.key-box{margin-top:16px;padding:12px;background:#12151b;border:1px solid var(--line);border-radius:12px}
+.key-box h3{margin:0 0 8px;font-size:13px;color:var(--text)}
+
+.pro-status-card{background:#12151b;border:1px solid rgba(245,192,74,.4);border-radius:12px;padding:12px 14px;margin:10px 0 12px}
+.pro-kv{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+.pro-kv:last-of-type{border-bottom:none}
+.pro-kv span{color:var(--sub)}
+.pro-kv code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#f5c04a;background:#1c2029;padding:2px 8px;border-radius:6px}
+.pro-active-pill{background:rgba(53,194,138,.18);color:var(--ok);padding:2px 10px;border-radius:99px;font-size:12px}
+.pro-sub-note{margin:8px 0 0;font-size:12px;color:#f5c04a;font-weight:700}
+.pro-perks{background:rgba(53,194,138,.09);border:1px solid rgba(53,194,138,.3);border-radius:10px;
+  padding:10px 12px;font-size:12px;color:var(--text);font-weight:700;margin-bottom:12px}
+.pro-release-box h3{margin:0 0 4px;font-size:13px;color:var(--text)}
+.pro-release-box .hint{margin:0 0 10px}

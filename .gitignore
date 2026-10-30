@@ -1,2 +1,8 @@
 licenses_issued.txt
 .DS_Store
+node_modules/
+.wrangler/
+.dev.vars
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars

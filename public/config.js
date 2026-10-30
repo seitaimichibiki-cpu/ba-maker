@@ -8,13 +8,26 @@ window.BAM_CONFIG = {
   // 無料版の透かし文字（院名の下に表示）
   WATERMARK_TEXT: "BAメーカー 無料版",
 
-  // 有料プラン表示用（※価格は提案値。Stripe側の設定と必ず一致させること）
+  // 有料プラン表示用（※Stripe側の設定価格と一致させること）
   PRO_PRICE_LABEL: "月額 480円（税込）",
-  PRO_PRICE_NOTE: "いつでも解約OK",
+  PRO_PRICE_NOTE: "いつでも解約OK ／ 1契約で最大2台の端末で利用可能",
 
-  // Stripe Payment Link など購入ページのURL（未設定なら購入ボタンは案内表示になる）
-  // 例: "https://buy.stripe.com/xxxxxxxx"
+  // 1. Stripe Payment Link（購入ページ）のURL
+  //    Stripe側の「支払い完了後のリダイレクト先」に以下を設定すると決済直後にその場で自動有効化されます：
+  //    https://seitaimichibiki-cpu.github.io/ba-maker/?session_id={CHECKOUT_SESSION_ID}
+  //    例: "https://buy.stripe.com/xxxxxxxx"
   PAYMENT_URL: "",
+
+  // 2. ライセンス自動認証・2台制限・解約自動遮断サーバー（Cloudflare Worker）のURL
+  //    例: "https://ba-maker-license.your-subdomain.workers.dev"
+  LICENSE_API_URL: "",
+
+  // 3. Stripe カスタマーポータル（契約確認・カード変更・解約手続きページ）のURL
+  //    例: "https://billing.stripe.com/p/login/xxxxxxxx"
+  CUSTOMER_PORTAL_URL: "",
+
+  // 1ライセンスあたりの同時利用端末上限（Worker側の MAX_DEVICES と揃える）
+  MAX_DEVICES: 2,
 
   // 無料 / 有料 の制限
   LIMITS: {
@@ -22,11 +35,6 @@ window.BAM_CONFIG = {
     pro:  { width: 1080, height: 1920, maxSeconds: 90 }
   },
 
-  // 有効なライセンスキーの SHA-256 ハッシュ一覧
-  // 生成方法: `node tools/make_license.js 3` （README参照）
-  LICENSE_HASHES: [
-    "de4fef8b2dae2473927c217f3fd1bc90c8f07e5b3f47a5d08d3483346fb23fe9", // テスト用 BAM-NAVQ…
-    "5d50a0c9cd29e1ff3e14ecc166b0a4865acf704a36100bd99eb408d8f674ad5e", // テスト用 BAM-NVGD…
-    "95772aeb22845b82f63e70d92d057844f26835dce586eaab4bca65c4cf7f2e32"  // テスト用 BAM-LR5C…
-  ]
+  // オフライン検証用フォールバック（LICENSE_API_URL 未設定時のみ使用。本番の自動運用では空配列のままにします）
+  LICENSE_HASHES: []
 };

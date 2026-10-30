@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 
@@ -16,7 +16,7 @@
   <div class="brand">🎬 <span id="brandName">BAメーカー</span><small>リール用ビフォーアフター</small></div>
   <div class="topbar-right">
     <span id="planBadge" class="badge free">無料プラン</span>
-    <button id="btnUpgrade" class="btn primary small">⭐ 有料プラン</button>
+    <button id="btnUpgrade" class="btn primary small">⭐ 有料プラン / キー入力</button>
   </div>
 </header>
 
@@ -65,6 +65,10 @@
           </div>
         </div>
         <div id="bgmTitle" class="bgm-title">爽やかポップ #1（126 BPM）</div>
+      </div>
+      <div id="planBar" class="plan-bar free">
+        <span id="planBarText">無料プラン：720p画質・院名下に透かしが入ります</span>
+        <button type="button" id="btnPlanBarUpgrade" class="btn tiny">⭐ 透かしを消す</button>
       </div>
       <button id="btnSave" class="btn primary big">💾 動画で保存する（🎵BGM付き）</button>
       <div class="progress" id="progressBox" hidden><div id="progressBar"></div></div>
@@ -172,43 +176,74 @@
   </section>
 </main>
 
-<!-- 有料プラン モーダル -->
+<!-- プラン・ライセンス管理モーダル（無料／有料で画面を分離） -->
 <div id="modal" class="modal" hidden>
   <div class="modal-body">
     <button id="modalClose" class="modal-x" aria-label="閉じる">×</button>
-    <h2>⭐ 有料プラン</h2>
-    <p class="price"><span id="priceLabel"></span><small id="priceNote"></small></p>
-    <table class="cmp">
-      <thead><tr><th></th><th>無料</th><th>有料</th></tr></thead>
-      <tbody>
-        <tr><td>リール用9:16レイアウト</td><td>○</td><td>○</td></tr>
-        <tr><td>画像・動画の左右比較</td><td>○</td><td>○</td></tr>
-        <tr><td>動き始め（歩き始め）自動同期</td><td>○</td><td>○</td></tr>
-        <tr><td>自動生成アップテンポBGM</td><td>○</td><td>○</td></tr>
-        <tr><td>書き出し画質</td><td>720×1280</td><td>1080×1920</td></tr>
-        <tr><td>動画の長さ</td><td>30秒まで</td><td>90秒まで</td></tr>
-        <tr><td>透かし表示</td><td>あり</td><td>なし</td></tr>
-        <tr><td>カラーテーマ</td><td>2種</td><td>5種＋自由配色</td></tr>
-        <tr><td>院のロゴ挿入</td><td>—</td><td>○</td></tr>
-      </tbody>
-    </table>
-    <a id="btnBuy" class="btn primary block" target="_blank" rel="noopener">有料プランに申し込む</a>
-    <p id="buyNote" class="hint"></p>
-    <hr>
-    <label>ライセンスキーをお持ちの方
-      <div class="key-row">
-        <input id="inKey" type="text" placeholder="BAM-XXXX-XXXX-XXXX" autocomplete="off">
-        <button id="btnActivate" class="btn">有効化</button>
+
+    <!-- 無料プラン時の表示：比較・購入・キー入力 -->
+    <div id="modalFreeView">
+      <h2>⭐ 有料プランのご案内</h2>
+      <p id="modalReason" class="modal-reason" hidden></p>
+      <p class="price"><span id="priceLabel"></span><small id="priceNote"></small></p>
+      <table class="cmp">
+        <thead><tr><th>機能</th><th>無料</th><th>⭐ 有料</th></tr></thead>
+        <tbody>
+          <tr><td>リール用9:16・画像／動画比較</td><td>○</td><td>○</td></tr>
+          <tr><td>動き始め自動同期・自動BGM</td><td>○</td><td>○</td></tr>
+          <tr><td>書き出し画質</td><td>720×1280</td><td>1080×1920</td></tr>
+          <tr><td>動画の長さ</td><td>30秒まで</td><td>90秒まで</td></tr>
+          <tr><td>院名下の透かし表示</td><td>あり</td><td>なし</td></tr>
+          <tr><td>カラーテーマ</td><td>2種</td><td>5種＋自由配色</td></tr>
+          <tr><td>院のロゴ挿入</td><td>—</td><td>○</td></tr>
+          <tr><td>同時利用できる端末数</td><td>—</td><td>最大2台まで</td></tr>
+          <tr><td>キー発行・解約切り替え</td><td>—</td><td>自動メール／自動切替</td></tr>
+        </tbody>
+      </table>
+      <a id="btnBuy" class="btn primary block" target="_blank" rel="noopener">💳 有料プランに申し込む（キー自動送信）</a>
+      <p id="buyNote" class="hint"></p>
+
+      <div class="key-box">
+        <h3>🔑 ライセンスキーをお持ちの方（2台目の登録もこちら）</h3>
+        <div class="key-row">
+          <input id="inKey" type="text" placeholder="BAM-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+          <button id="btnActivate" class="btn">有効化</button>
+        </div>
+        <p id="keyMsg" class="msg"></p>
       </div>
-    </label>
-    <p id="keyMsg" class="msg"></p>
-    <button id="btnDeactivate" class="btn tiny" hidden>この端末のライセンスを解除</button>
+    </div>
+
+    <!-- 有料プラン認証済み時の表示：契約状態・2台枠・端末解除・解約導線 -->
+    <div id="modalProView" hidden>
+      <h2>⭐ 有料プラン（ご利用中）</h2>
+      <div class="pro-status-card">
+        <div class="pro-kv"><span>現在の状態</span><strong id="proStatusBadge" class="pro-active-pill">有効（認証済み）</strong></div>
+        <div class="pro-kv"><span>ライセンスキー</span><code id="proKeyMasked">BAM-••••</code></div>
+        <div class="pro-kv"><span>登録端末数</span><strong id="proDeviceInfo">1 / 2 台（最大2台まで）</strong></div>
+        <p id="proSubNote" class="pro-sub-note" hidden></p>
+      </div>
+
+      <div class="pro-perks">
+        ✔ 透かしなし ／ ✔ 1080×1920 フルHD ／ ✔ 最大90秒 ／ ✔ 全テーマ＆自由配色 ／ ✔ 院ロゴ挿入
+      </div>
+
+      <a id="btnPortal" class="btn block" target="_blank" rel="noopener">📄 ご契約確認・カード変更・解約手続き</a>
+      <p id="portalNote" class="hint"></p>
+
+      <hr>
+      <div class="pro-release-box">
+        <h3>📱 この端末の登録解除（端末の入れ替え）</h3>
+        <p class="hint">機種変更や別の端末（iPad／PCなど）へ切り替える際は、下のボタンでこの端末の枠を1つ空けられます。解約された場合は自動で無料プランへ戻ります。</p>
+        <button id="btnDeactivate" class="btn small">🔓 この端末のライセンスを解除する</button>
+        <p id="proMsg" class="msg"></p>
+      </div>
+    </div>
   </div>
 </div>
 
-<script src="config.js?v=4"></script>
-<script src="bgm.js?v=4"></script>
-<script src="motion.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="config.js?v=5"></script>
+<script src="bgm.js?v=5"></script>
+<script src="motion.js?v=5"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

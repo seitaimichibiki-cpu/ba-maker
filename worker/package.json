@@ -1,0 +1,12 @@
+{
+  "name": "ba-maker-license-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BAメーカー 有料プラン自動ライセンス発行・2台端末制限・サブスク解約連動 Cloudflare Worker",
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "tail": "npx wrangler tail"
+  }
+}

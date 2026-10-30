@@ -205,69 +205,475 @@
     refreshTrimUI();
   }
 
-  // ---------- ライセンス ----------
+  // ---------- ライセンス（自動認証・2台制限・解約自動遮断） ----------
   const LS_KEY = "bam_license";
+  const LS_LIC_META = "bam_license_meta_v1";
+  const LS_DEVICE = "bam_device_v1";
+  const OFFLINE_GRACE_MS = 24 * 3600_000;
+  const VERIFY_CACHE_MS = 5 * 60_000;
   let pro = false;
+  let licMeta = null;
+  let verifyInFlight = null;
+
+  const normKey = (k) => String(k || "").trim().toUpperCase().replace(/\s+/g, "");
+  const apiBase = () => String(CFG.LICENSE_API_URL || "").trim().replace(/\/+$/, "");
+
+  function maskKeyLocal(k) {
+    const n = normKey(k);
+    if (!n) return "BAM-••••";
+    const parts = n.split("-");
+    return parts.length === 4
+      ? `${parts[0]}-${parts[1]}-••••-${parts[3].slice(-2)}••`
+      : n.slice(0, 8) + "••••";
+  }
+
+  function getDeviceId() {
+    try {
+      const existing = localStorage.getItem(LS_DEVICE);
+      if (existing && existing.length >= 12) return existing;
+    } catch (e) {}
+    let rnd = "";
+    if (window.crypto && crypto.getRandomValues) {
+      const buf = new Uint8Array(12);
+      crypto.getRandomValues(buf);
+      rnd = Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+    } else {
+      rnd = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+    const id = "dev_" + rnd;
+    try { localStorage.setItem(LS_DEVICE, id); } catch (e) {}
+    return id;
+  }
+
+  function getDeviceLabel() {
+    const ua = navigator.userAgent || "";
+    if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return "iPad";
+    if (/iPhone/i.test(ua)) return "iPhone";
+    if (/Android/i.test(ua)) return "Android";
+    if (/Macintosh|Mac OS/i.test(ua)) return "Mac";
+    if (/Windows/i.test(ua)) return "Windows";
+    return "ブラウザ";
+  }
+
+  function loadLicMeta() {
+    try {
+      const raw = localStorage.getItem(LS_LIC_META);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function saveLicMeta(meta) {
+    licMeta = meta;
+    try { localStorage.setItem(LS_LIC_META, JSON.stringify(meta)); } catch (e) {}
+  }
+
+  function clearLocalLicense() {
+    licMeta = null;
+    pro = false;
+    try {
+      localStorage.removeItem(LS_KEY);
+      localStorage.removeItem(LS_LIC_META);
+    } catch (e) {}
+  }
 
   async function sha256(str) {
     if (!(window.crypto && crypto.subtle)) throw new Error("HTTPS（またはlocalhost）で開いてください");
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
   }
-  const normKey = (k) => k.trim().toUpperCase().replace(/\s+/g, "");
 
-  async function checkLicense(key) {
+  async function checkOfflineHash(key) {
+    if (!Array.isArray(CFG.LICENSE_HASHES) || CFG.LICENSE_HASHES.length === 0) return false;
     try { return CFG.LICENSE_HASHES.includes(await sha256(normKey(key))); }
     catch (e) { return false; }
   }
 
-  function applyPlan() {
-    $("planBadge").textContent = pro ? "⭐ 有料プラン" : "無料プラン";
+  async function postLicenseApi(path, payload, timeoutMs) {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs || 8000) : 0;
+    try {
+      const res = await fetch(apiBase() + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: ctrl ? ctrl.signal : undefined
+      });
+      let data = null;
+      try { data = await res.json(); } catch (e) {}
+      return { okHttp: res.ok, status: res.status, data };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  function formatJpDate(unixSec) {
+    if (!unixSec || !isFinite(unixSec)) return "";
+    const d = new Date(unixSec * 1000);
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+
+  function syncModalView() {
+    $("modalFreeView").hidden = pro;
+    $("modalProView").hidden = !pro;
+    $("priceLabel").textContent = CFG.PRO_PRICE_LABEL;
+    $("priceNote").textContent = CFG.PRO_PRICE_NOTE;
+
+    const buy = $("btnBuy");
+    if (CFG.PAYMENT_URL) {
+      buy.href = CFG.PAYMENT_URL;
+      buy.removeAttribute("aria-disabled");
+    } else {
+      buy.removeAttribute("href");
+    }
+    $("buyNote").textContent = CFG.PAYMENT_URL
+      ? "決済完了後、ご登録メール宛にワンタップ有効化リンク＆ライセンスキーが即時自動送信されます（最大2台まで利用可）。"
+      : "※購入ページは準備中です（管理者が config.js の PAYMENT_URL を設定すると有効になります）。";
+
+    if (pro) {
+      const maxD = (licMeta && licMeta.maxDevices) || CFG.MAX_DEVICES || 2;
+      const curD = (licMeta && licMeta.deviceCount) || 1;
+      $("proStatusBadge").textContent = (licMeta && licMeta.cancelAtPeriodEnd)
+        ? "有効（期間終了で自動解約）"
+        : "有効（認証済み）";
+      $("proKeyMasked").textContent = (licMeta && licMeta.maskedKey) || maskKeyLocal(localStorage.getItem(LS_KEY) || "");
+      $("proDeviceInfo").textContent = `${curD} / ${maxD} 台（最大${maxD}台まで）`;
+
+      const subNote = $("proSubNote");
+      if (licMeta && licMeta.cancelAtPeriodEnd) {
+        const endStr = formatJpDate(licMeta.currentPeriodEnd);
+        subNote.textContent = endStr
+          ? `※解約予約済みです。${endStr}までは有料プランをご利用いただけ、その後は自動で無料プランへ戻ります。`
+          : "※解約予約済みです。契約期間終了後に自動で無料プランへ戻ります。";
+        subNote.hidden = false;
+      } else {
+        subNote.hidden = true;
+      }
+
+      const portal = $("btnPortal");
+      if (CFG.CUSTOMER_PORTAL_URL) {
+        portal.href = CFG.CUSTOMER_PORTAL_URL;
+        portal.hidden = false;
+        $("portalNote").textContent = "Stripeの契約管理ページでお支払い方法の変更・解約手続きが行えます。";
+      } else {
+        portal.removeAttribute("href");
+        portal.hidden = true;
+        $("portalNote").textContent = "ご契約の確認・解約は、購入完了メール内のリンクからお手続きいただけます。";
+      }
+    }
+  }
+
+  function applyPlan(upgradeQuality) {
+    $("planBadge").textContent = pro ? "⭐ 有料プラン（認証済）" : "無料プラン";
     $("planBadge").className = "badge " + (pro ? "pro" : "free");
-    $("btnUpgrade").hidden = pro;
-    $("optHQ").textContent = pro ? "1080×1920（高画質）" : "🔒 1080×1920（有料）";
-    $("btnLogo").textContent = pro ? "ロゴを追加" : "🔒 ロゴを追加（有料）";
-    $("btnDeactivate").hidden = !pro;
-    if (pro && state.preferredTheme && THEMES[state.preferredTheme]) {
-      state.theme = state.preferredTheme;
-    } else if (!pro) {
+
+    // 有料会員もいつでも端末解除・解約確認できるようボタンを常時表示し役割を切り替える
+    const upg = $("btnUpgrade");
+    upg.hidden = false;
+    upg.textContent = pro ? "⚙ プラン・端末管理" : "⭐ 有料プラン / キー入力";
+    upg.className = pro ? "btn small" : "btn primary small";
+
+    const bar = $("planBar");
+    if (bar) {
+      bar.className = "plan-bar " + (pro ? "pro" : "free");
+      $("planBarText").textContent = pro
+        ? "⭐ 有料プラン適用中：透かしなし・1080×1920 フルHD"
+        : "無料プラン：720p画質・院名下に透かしが入ります";
+      $("btnPlanBarUpgrade").hidden = pro;
+    }
+
+    $("optHQ").textContent = pro ? "1080×1920（フルHD・高画質）" : "🔒 1080×1920（有料）";
+    $("btnLogo").textContent = pro ? "🖼 ロゴを追加" : "🔒 ロゴを追加（有料）";
+
+    if (pro) {
+      if (upgradeQuality) $("selQuality").value = "1080";
+      if (state.preferredTheme && THEMES[state.preferredTheme]) {
+        state.theme = state.preferredTheme;
+      }
+    } else {
       if (THEMES[state.theme].pro) state.theme = "dark";
       $("selQuality").value = "720";
       state.logo = null;
       $("btnLogoClear").hidden = true;
     }
+
     const lim = pro ? CFG.LIMITS.pro : CFG.LIMITS.free;
     $("limitHint").textContent =
       `現在のプラン：${lim.width}×${lim.height} ／ 動画は最大${lim.maxSeconds}秒` +
-      (pro ? "" : " ／ 透かしあり") +
+      (pro ? " ／ 透かしなし" : " ／ 院名下に透かしあり") +
       "。MP4で保存できない環境ではWebMで保存されます。";
     renderThemes();
+    syncModalView();
+  }
+
+  function buildMetaFromApi(key, data) {
+    return {
+      maskedKey: (data && data.maskedKey) || maskKeyLocal(key),
+      deviceCount: (data && data.deviceCount) || 1,
+      maxDevices: (data && data.maxDevices) || CFG.MAX_DEVICES || 2,
+      cancelAtPeriodEnd: !!(data && data.cancelAtPeriodEnd),
+      currentPeriodEnd: (data && data.currentPeriodEnd) || null,
+      verifiedAt: Date.now()
+    };
+  }
+
+  async function activateLicenseKey(rawKey) {
+    const key = normKey(rawKey);
+    if (!key) throw new Error("ライセンスキーを入力してください。");
+
+    if (apiBase()) {
+      let res;
+      try {
+        res = await postLicenseApi("/api/activate", {
+          key,
+          deviceId: getDeviceId(),
+          deviceLabel: getDeviceLabel()
+        }, 8000);
+      } catch (e) {
+        throw new Error("認証サーバーに接続できませんでした。通信環境をご確認のうえ再度お試しください。");
+      }
+      const d = res.data || {};
+      if (res.okHttp && d.ok && d.active) {
+        const finalKey = normKey(d.key || key);
+        try { localStorage.setItem(LS_KEY, finalKey); } catch (e) {}
+        saveLicMeta(buildMetaFromApi(finalKey, d));
+        pro = true;
+        applyPlan(true);
+        return licMeta;
+      }
+      throw new Error(d.message || "ライセンスキーを有効化できませんでした。");
+    }
+
+    // オフラインフォールバック（LICENSE_API_URL 未設定時のみ）
+    if (!Array.isArray(CFG.LICENSE_HASHES) || CFG.LICENSE_HASHES.length === 0) {
+      throw new Error("ライセンス認証サーバー（config.js の LICENSE_API_URL）が未設定です。");
+    }
+    if (await checkOfflineHash(key)) {
+      try { localStorage.setItem(LS_KEY, key); } catch (e) {}
+      saveLicMeta(buildMetaFromApi(key, null));
+      pro = true;
+      applyPlan(true);
+      return licMeta;
+    }
+    throw new Error("ライセンスキーが正しくありません。");
+  }
+
+  async function verifyActiveLicense(opts) {
+    opts = opts || {};
+    if (verifyInFlight) return verifyInFlight;
+    verifyInFlight = (async () => {
+      const saved = normKey(localStorage.getItem(LS_KEY) || "");
+      if (!saved) {
+        if (pro) { pro = false; applyPlan(false); }
+        return false;
+      }
+
+      if (!apiBase()) {
+        const ok = await checkOfflineHash(saved);
+        if (!ok) {
+          clearLocalLicense();
+          applyPlan(false);
+          return false;
+        }
+        const wasPro = pro;
+        if (!licMeta) saveLicMeta(buildMetaFromApi(saved, null));
+        pro = true;
+        applyPlan(!wasPro);
+        return true;
+      }
+
+      if (!opts.force && pro && licMeta && (Date.now() - (licMeta.verifiedAt || 0) < VERIFY_CACHE_MS)) {
+        return true;
+      }
+
+      try {
+        const res = await postLicenseApi("/api/verify", {
+          key: saved,
+          deviceId: getDeviceId(),
+          deviceLabel: getDeviceLabel()
+        }, 6000);
+        const d = res.data || {};
+        if (res.okHttp && d.ok && d.active) {
+          const wasPro = pro;
+          saveLicMeta(buildMetaFromApi(saved, d));
+          pro = true;
+          applyPlan(!wasPro);
+          return true;
+        }
+        if (res.status === 403 || res.status === 404 || d.active === false) {
+          const msg = d.message || "有料プランの有効期限が終了したため、無料プランに戻りました。";
+          clearLocalLicense();
+          applyPlan(false);
+          setMsg(msg, "err");
+          if (!$("modal").hidden) {
+            $("keyMsg").textContent = msg;
+            $("keyMsg").className = "msg err";
+          }
+          return false;
+        }
+      } catch (e) {
+        // 一時的な通信断は最終認証から24時間以内のみ猶予し、それ以降は自動遮断する
+        if (licMeta && licMeta.verifiedAt && (Date.now() - licMeta.verifiedAt < OFFLINE_GRACE_MS)) {
+          const wasPro = pro;
+          pro = true;
+          applyPlan(!wasPro);
+          return true;
+        }
+        pro = false;
+        applyPlan(false);
+        return false;
+      }
+      return pro;
+    })();
+    try { return await verifyInFlight; }
+    finally { verifyInFlight = null; }
+  }
+
+  async function deactivateCurrentDevice() {
+    const saved = normKey(localStorage.getItem(LS_KEY) || "");
+    const btn = $("btnDeactivate");
+    const msgEl = $("proMsg");
+    msgEl.textContent = "";
+    msgEl.className = "msg";
+
+    if (saved && apiBase()) {
+      btn.disabled = true;
+      try {
+        const res = await postLicenseApi("/api/deactivate", {
+          key: saved,
+          deviceId: getDeviceId()
+        }, 7000);
+        if (!res.okHttp && res.status !== 404) {
+          throw new Error((res.data && res.data.message) || "解除に失敗しました。");
+        }
+      } catch (e) {
+        btn.disabled = false;
+        msgEl.textContent = "通信エラーのため端末枠を解除できませんでした。ネット接続を確認して再度お試しください。";
+        msgEl.className = "msg err";
+        return;
+      }
+      btn.disabled = false;
+    }
+
+    clearLocalLicense();
+    $("inKey").value = "";
+    applyPlan(false);
+    $("keyMsg").textContent = "この端末のライセンスを解除し、無料プランに戻りました（端末枠が1つ空きました）。";
+    $("keyMsg").className = "msg ok";
+    setMsg("この端末のライセンスを解除しました（無料プランに戻りました）。", "ok");
+  }
+
+  async function claimSessionFromRedirect(sessionId) {
+    if (!apiBase()) {
+      openModal("お申し込みありがとうございます！メールで届くライセンスキーを下の欄に入力してください。");
+      return;
+    }
+    setMsg("決済を確認して有料プランを有効化しています…");
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const res = await postLicenseApi("/api/claim-session", {
+          sessionId,
+          deviceId: getDeviceId(),
+          deviceLabel: getDeviceLabel()
+        }, 8000);
+        const d = res.data || {};
+        if (res.status === 202 || d.code === "PENDING") {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        if (res.okHttp && d.ok && d.active && d.key) {
+          const finalKey = normKey(d.key);
+          try { localStorage.setItem(LS_KEY, finalKey); } catch (e) {}
+          saveLicMeta(buildMetaFromApi(finalKey, d));
+          pro = true;
+          applyPlan(true);
+          setMsg("⭐ ご購入ありがとうございます！有料プランが自動で有効になりました（控えメールも送信しました）。", "ok");
+          return;
+        }
+        openModal(d.message || "自動有効化できませんでした。メールに届いたライセンスキーを入力してください。");
+        return;
+      } catch (e) {
+        if (attempt === 4) {
+          openModal("通信エラーのため自動有効化を完了できませんでした。メールに届いたライセンスキーを入力してください。");
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    openModal("決済確認に時間がかかっています。数分以内に届くメールのワンタップリンクまたはキーをご利用ください。");
   }
 
   async function initLicense() {
-    const saved = localStorage.getItem(LS_KEY);
-    pro = saved ? await checkLicense(saved) : false;
-    if (saved && !pro) localStorage.removeItem(LS_KEY);
-    applyPlan();
+    licMeta = loadLicMeta();
+    const saved = normKey(localStorage.getItem(LS_KEY) || "");
+
+    // URLパラメータ（?key=BAM-... ワンタップメール認証 ／ ?session_id=cs_... 決済直後リダイレクト）を処理
+    let urlKey = "", urlSession = "";
+    try {
+      const url = new URL(window.location.href);
+      urlKey = normKey(url.searchParams.get("key") || "");
+      urlSession = String(url.searchParams.get("session_id") || "").trim();
+      if (urlKey || urlSession) {
+        url.searchParams.delete("key");
+        url.searchParams.delete("session_id");
+        window.history.replaceState(null, "", url.pathname + (url.search ? url.search : "") + url.hash);
+      }
+    } catch (e) {}
+
+    if (urlKey) {
+      applyPlan(false);
+      try {
+        await activateLicenseKey(urlKey);
+        setMsg("⭐ ワンタップ認証完了：有料プランが有効になりました！", "ok");
+      } catch (e) {
+        $("inKey").value = urlKey;
+        openModal(e.message || "ライセンスを有効化できませんでした。");
+        $("keyMsg").textContent = e.message || "";
+        $("keyMsg").className = "msg err";
+      }
+      return;
+    }
+
+    if (urlSession) {
+      applyPlan(false);
+      await claimSessionFromRedirect(urlSession);
+      return;
+    }
+
+    // 保存済みキーがある場合、24時間以内のキャッシュがあれば初期描画のチラつきを防ぎつつ即時サーバー照合
+    if (saved && licMeta && licMeta.verifiedAt && (Date.now() - licMeta.verifiedAt < OFFLINE_GRACE_MS)) {
+      pro = true;
+      applyPlan(true);
+    } else {
+      applyPlan(false);
+    }
+    if (saved) {
+      await verifyActiveLicense({ silent: false, force: true });
+    }
   }
 
   // ---------- モーダル ----------
   function openModal(reason) {
-    $("priceLabel").textContent = CFG.PRO_PRICE_LABEL;
-    $("priceNote").textContent = CFG.PRO_PRICE_NOTE;
-    const buy = $("btnBuy");
-    if (CFG.PAYMENT_URL) { buy.href = CFG.PAYMENT_URL; buy.removeAttribute("aria-disabled"); }
-    else { buy.removeAttribute("href"); }
-    $("buyNote").textContent = CFG.PAYMENT_URL
-      ? "お申し込み後、ライセンスキーをお送りします。下の欄に入力すると有効になります。"
-      : "※購入ページは準備中です（管理者が config.js の PAYMENT_URL を設定してください）。";
-    $("keyMsg").textContent = reason ? reason : "";
+    syncModalView();
+    const reasonEl = $("modalReason");
+    if (reason && !pro) {
+      reasonEl.textContent = reason;
+      reasonEl.hidden = false;
+    } else {
+      reasonEl.textContent = "";
+      reasonEl.hidden = true;
+    }
+    $("keyMsg").textContent = "";
     $("keyMsg").className = "msg";
+    $("proMsg").textContent = "";
+    $("proMsg").className = "msg";
     $("modal").hidden = false;
+    if (pro && apiBase()) {
+      verifyActiveLicense({ silent: false, force: false });
+    }
   }
   function requirePro(feature) {
     if (pro) return true;
-    openModal(`「${feature}」は有料プランの機能です。`);
+    openModal(`🔒「${feature}」は有料プラン限定の機能です。`);
     return false;
   }
 
@@ -1055,8 +1461,11 @@
   }
   const stamp = () => { const d = new Date(), z = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`; };
 
-  function savePng() {
+  async function savePng() {
     if (!state.panels.before.el && !state.panels.after.el) { setMsg("先にビフォー／アフターの画像か動画を追加してください。", "err"); return; }
+    if (pro && apiBase()) {
+      await verifyActiveLicense({ silent: false, force: false });
+    }
     const { w, h } = exportSize();
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
     render(cv.getContext("2d"), w, h, {});
@@ -1082,7 +1491,7 @@
     }
     const vids = videos();
     if (!vids.length && !state.bgm.enabled) {
-      savePng();
+      await savePng();
       return;
     }
     if (!window.MediaRecorder) {
@@ -1090,12 +1499,8 @@
       return;
     }
 
-    const { w, h } = exportSize();
-    const maxSec = lim().maxSeconds;
     const mime = pickMime();
     const ext = mime.includes("mp4") ? "mp4" : "webm";
-    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
-    const cctx = cv.getContext("2d", { alpha: false });
 
     // iPad Safari対策：最初のawaitより前（タップ同期タイミング）にAudioContextを確保
     const which = $("selAudio").value;
@@ -1118,6 +1523,15 @@
     $("progressBox").hidden = false; $("progressBar").style.width = "0%";
 
     try {
+      // 書き出し前にライセンスの有効状態を再照合（解約・未払い時は自動で無料プラン＝720p・透かしありへ切り戻す）
+      if (pro && apiBase()) {
+        await verifyActiveLicense({ silent: false, force: false });
+      }
+      const { w, h } = exportSize();
+      const maxSec = lim().maxSeconds;
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      const cctx = cv.getContext("2d", { alpha: false });
+
       const pendingScans = vids.map(p => p.scanning && p.scanPromise).filter(Boolean);
       if (pendingScans.length) {
         setMsg("動き始めの位置を解析しています…");
@@ -1372,7 +1786,11 @@
       saveSettings();
     };
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) stopBgmPreview();
+      if (document.hidden) {
+        stopBgmPreview();
+      } else if (pro && apiBase() && !state.exporting) {
+        verifyActiveLicense({ silent: false, force: false });
+      }
     });
 
     $("btnLogo").onclick = () => { if (requirePro("ロゴ挿入")) $("fileLogo").click(); };
@@ -1393,20 +1811,42 @@
     $("btnSave").onclick = () => ((videos().length || state.bgm.enabled) ? saveVideo() : savePng());
 
     $("btnUpgrade").onclick = () => openModal();
+    $("btnPlanBarUpgrade").onclick = () => openModal();
     $("modalClose").onclick = () => { $("modal").hidden = true; };
     $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) $("modal").hidden = true; });
     $("btnBuy").addEventListener("click", (e) => { if (!CFG.PAYMENT_URL) e.preventDefault(); });
-    $("btnActivate").onclick = async () => {
+    $("btnPortal").addEventListener("click", (e) => { if (!CFG.CUSTOMER_PORTAL_URL) e.preventDefault(); });
+
+    const doActivate = async () => {
       const key = $("inKey").value;
-      if (!key.trim()) { $("keyMsg").textContent = "ライセンスキーを入力してください。"; $("keyMsg").className = "msg err"; return; }
+      if (!key.trim()) {
+        $("keyMsg").textContent = "ライセンスキーを入力してください。";
+        $("keyMsg").className = "msg err";
+        return;
+      }
+      const btn = $("btnActivate");
+      btn.disabled = true;
+      $("keyMsg").textContent = "ライセンスを確認しています…";
+      $("keyMsg").className = "msg";
       try {
-        if (await checkLicense(key)) {
-          localStorage.setItem(LS_KEY, normKey(key)); pro = true; applyPlan();
-          $("keyMsg").textContent = "有料プランを有効化しました。"; $("keyMsg").className = "msg ok";
-        } else { $("keyMsg").textContent = "ライセンスキーが正しくありません。"; $("keyMsg").className = "msg err"; }
-      } catch (e) { $("keyMsg").textContent = e.message; $("keyMsg").className = "msg err"; }
+        await activateLicenseKey(key);
+        $("inKey").value = "";
+        $("keyMsg").textContent = "";
+        $("proMsg").textContent = "⭐ 有料プランを有効化しました！";
+        $("proMsg").className = "msg ok";
+        setMsg("⭐ 有料プランを有効化しました（透かしなし・1080×1920フルHD）。", "ok");
+      } catch (e) {
+        $("keyMsg").textContent = e.message || "有効化に失敗しました。";
+        $("keyMsg").className = "msg err";
+      } finally {
+        btn.disabled = false;
+      }
     };
-    $("btnDeactivate").onclick = () => { localStorage.removeItem(LS_KEY); pro = false; applyPlan(); $("keyMsg").textContent = "解除しました。"; };
+    $("btnActivate").onclick = doActivate;
+    $("inKey").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); doActivate(); }
+    });
+    $("btnDeactivate").onclick = deactivateCurrentDevice;
   }
 
   loadSettings();
