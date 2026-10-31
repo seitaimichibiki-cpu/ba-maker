@@ -81,10 +81,15 @@
   let logoUrl = null;
   let previewDirty = true;
   let fontEpoch = 0;
+  let lastExport = null;
+  let captionEdited = false;
+  let pendingSnsTarget = null;
+  let lastSnsUiReady = null;
   const fitCache = new Map();
 
   function markDirty() {
     previewDirty = true;
+    if (lastExport) refreshSnsUI();
   }
 
   function clearLogo() {
@@ -116,6 +121,7 @@
     $("btnSave").textContent = willVideo
       ? (state.bgm.enabled ? "💾 動画で保存する（🎵BGM付き）" : "💾 動画で保存する")
       : "💾 画像（PNG）で保存する";
+    refreshSnsUI();
   }
 
   function toggleBgmPreview() {
@@ -229,6 +235,8 @@
     syncTextSliders();
     refreshBgmUI();
     refreshTrimUI();
+    syncAutoCaption();
+    initSnsUI();
   }
 
   // ---------- ライセンス（自動認証・2台制限・解約自動遮断） ----------
@@ -1834,11 +1842,54 @@
     markDirty();
   }
 
-  // ---------- 書き出し ----------
+  // ---------- 書き出し＆各種SNS投稿 ----------
   function lim() { return pro ? CFG.LIMITS.pro : CFG.LIMITS.free; }
   function exportSize() {
     const hq = pro && $("selQuality").value === "1080";
     return hq ? { w: CFG.LIMITS.pro.width, h: CFG.LIMITS.pro.height } : { w: CFG.LIMITS.free.width, h: CFG.LIMITS.free.height };
+  }
+  function currentExportMode() {
+    return (videos().length || state.bgm.enabled) ? "video" : "image";
+  }
+  function exportSignature(modeOverride) {
+    const mode = modeOverride || currentExportMode();
+    const { w, h } = exportSize();
+    const b = state.panels.before, a = state.panels.after;
+    return [
+      mode, w, h, pro ? 1 : 0,
+      $("selAudio") ? $("selAudio").value : "none",
+      state.theme,
+      state.theme === "custom" ? `${state.custom.bg},${state.custom.text},${state.custom.accent}` : "",
+      logoUrl || "",
+      state.symptom, state.age, state.clinic, state.sub,
+      state.textPos.symptom.dx, state.textPos.symptom.dy,
+      state.textPos.age.dx, state.textPos.age.dy,
+      state.textPos.clinic.dx, state.textPos.clinic.dy,
+      state.textPos.sub.dx, state.textPos.sub.dy,
+      mode === "video" ? `${state.bgm.enabled ? 1 : 0},${state.bgm.seed},${state.bgm.volume},${state.bgm.photoSec}` : "",
+      b.type || "", b.url || "", b.zoom, b.ox, b.oy, b.trimStart,
+      a.type || "", a.url || "", a.zoom, a.ox, a.oy, a.trimStart
+    ].join("\x1f");
+  }
+  function isExportFresh() {
+    if (!lastExport) return false;
+    return lastExport.sig === exportSignature(currentExportMode());
+  }
+  function storeLastExport(blob, filename, mime, kind, sig, downloaded) {
+    let file = null;
+    try {
+      file = new File([blob], filename, { type: mime, lastModified: Date.now() });
+    } catch (e) {}
+    lastExport = { blob, file, filename, mime, kind, sig, downloaded: !!downloaded };
+    setPendingSns(null);
+    lastSnsUiReady = null;
+    refreshSnsUI();
+    return lastExport;
+  }
+  function setSnsButtonsDisabled(disabled) {
+    document.querySelectorAll("[data-sns]").forEach((b) => { b.disabled = disabled; });
+    const nb = $("btnNativeShare");
+    if (nb) nb.disabled = disabled;
   }
   function download(blob, filename) {
     const a = document.createElement("a");
@@ -1848,15 +1899,31 @@
   }
   const stamp = () => { const d = new Date(), z = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`; };
 
-  async function savePng() {
-    if (!state.panels.before.el && !state.panels.after.el) { setMsg("先にビフォー／アフターの画像か動画を追加してください。", "err"); return; }
+  async function savePng(opts) {
+    const doDownload = !(opts && opts.download === false);
+    if (!state.panels.before.el && !state.panels.after.el) {
+      setMsg("先にビフォー／アフターの画像か動画を追加してください。", "err");
+      return null;
+    }
     if (pro && apiBase()) {
       await verifyActiveLicense({ silent: false, force: false });
     }
     const { w, h } = exportSize();
+    const sig = exportSignature("image");
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
     render(cv.getContext("2d"), w, h, {});
-    cv.toBlob((b) => { download(b, `before-after-${stamp()}.png`); setMsg("PNGを保存しました。", "ok"); }, "image/png");
+    const blob = await new Promise((res) => cv.toBlob(res, "image/png"));
+    if (!blob) {
+      setMsg("PNGの作成に失敗しました。", "err");
+      return null;
+    }
+    const filename = `before-after-${stamp()}.png`;
+    const exp = storeLastExport(blob, filename, "image/png", "image", sig, doDownload);
+    if (doDownload) {
+      download(blob, filename);
+      setMsg("PNGを保存しました。下のSNSボタンからそのまま投稿できます。", "ok");
+    }
+    return exp;
   }
 
   function pickMime() {
@@ -1866,24 +1933,24 @@
     ];
     return list.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
   }
-  async function saveVideo() {
-    if (state.exporting) return;
+  async function saveVideo(opts) {
+    if (state.exporting) return null;
+    const doDownload = !(opts && opts.download === false);
     syncToken++;
     syncingVideos = false;
     clearLoopTimer();
     stopBgmPreview();
     if (!state.panels.before.el && !state.panels.after.el) {
       setMsg("先にビフォー／アフターの写真か動画を追加してください。", "err");
-      return;
+      return null;
     }
     const vids = videos();
     if (!vids.length && !state.bgm.enabled) {
-      await savePng();
-      return;
+      return await savePng(opts);
     }
     if (!window.MediaRecorder) {
       setMsg("このブラウザは動画書き出しに非対応です。Chrome / Edge / Safari 最新版をお使いください。", "err");
-      return;
+      return null;
     }
 
     const mime = pickMime();
@@ -1907,7 +1974,9 @@
     state.exporting = true;
     vids.forEach(p => { if (p.el) p.el.pause(); });
     $("btnSave").disabled = true; $("btnPng").disabled = true;
+    setSnsButtonsDisabled(true);
     $("progressBox").hidden = false; $("progressBar").style.width = "0%";
+    let resultExp = null;
 
     try {
       // 書き出し前にライセンスの有効状態を再照合（解約・未払い時は自動で無料プラン＝720p・透かしありへ切り戻す）
@@ -1916,6 +1985,7 @@
       }
       const { w, h } = exportSize();
       const maxSec = lim().maxSeconds;
+      const sig = exportSignature("video");
       const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
       const cctx = cv.getContext("2d", { alpha: false });
 
@@ -2026,11 +2096,16 @@
       rec.stop();
       await stopped;
 
-      const blob = new Blob(chunks, { type: (rec.mimeType || mime || "video/webm").split(";")[0] });
-      download(blob, `before-after-${stamp()}.${ext}`);
-      setMsg(ext === "mp4"
-        ? (wantBgm ? "BGM付きのMP4動画を保存しました。" : "MP4を保存しました。")
-        : "WebMで保存しました（Instagramに投稿できない場合はMP4へ変換が必要です。READMEを参照）。", "ok");
+      const cleanMime = (rec.mimeType || mime || "video/webm").split(";")[0];
+      const blob = new Blob(chunks, { type: cleanMime });
+      const filename = `before-after-${stamp()}.${ext}`;
+      resultExp = storeLastExport(blob, filename, cleanMime, "video", sig, doDownload);
+      if (doDownload) {
+        download(blob, filename);
+        setMsg(ext === "mp4"
+          ? (wantBgm ? "BGM付きのMP4動画を保存しました。下のSNSボタンからそのまま投稿できます。" : "MP4を保存しました。下のSNSボタンからそのまま投稿できます。")
+          : "WebMで保存しました（Instagramに投稿できない場合はMP4へ変換が必要です。READMEを参照）。", "ok");
+      }
     } catch (err) {
       console.error(err);
       setMsg("書き出しに失敗しました：" + (err && err.message ? err.message : err), "err");
@@ -2041,8 +2116,316 @@
       state.exporting = false;
       markDirty();
       $("btnSave").disabled = false; $("btnPng").disabled = false;
+      setSnsButtonsDisabled(false);
       setTimeout(() => { $("progressBox").hidden = true; }, 1200);
       restartVideos();
+    }
+    return resultExp;
+  }
+
+  function runCurrentExport(opts) {
+    return (videos().length || state.bgm.enabled) ? saveVideo(opts) : savePng(opts);
+  }
+
+  // ---------- SNS投稿文自動生成・共有シート／投稿画面起動 ----------
+  const SNS_META = {
+    youtube: {
+      label: "YouTube",
+      buildUrl: () => "https://www.youtube.com/upload",
+      pcGuide: "📋 投稿文をコピーし、YouTubeアップロード画面を開きました。保存された動画をドラッグ＆ドロップし、説明欄に貼り付けてください。"
+    },
+    instagram: {
+      label: "Instagram",
+      buildUrl: () => "https://www.instagram.com/",
+      pcGuide: "📋 投稿文をコピーし、Instagramを開きました。画面の「＋（作成）」へ保存された動画をドラッグ＆ドロップし、投稿文を貼り付けてください。"
+    },
+    facebook: {
+      label: "Facebook",
+      buildUrl: (_caption, kind) => kind === "image"
+        ? "https://www.facebook.com/"
+        : "https://www.facebook.com/reels/create/",
+      pcGuide: "📋 投稿文をコピーし、Facebook投稿画面を開きました。保存されたファイルをドラッグ＆ドロップし、投稿文を貼り付けてください。"
+    },
+    x: {
+      label: "X",
+      buildUrl: (caption) => "https://x.com/intent/post?text=" + encodeURIComponent(caption),
+      pcGuide: "📋 投稿文入りのX投稿画面を開きました。保存された動画・画像を画面へドラッグ＆ドロップして投稿してください。"
+    },
+    threads: {
+      label: "Threads",
+      buildUrl: (caption) => "https://www.threads.net/intent/post?text=" + encodeURIComponent(caption),
+      pcGuide: "📋 投稿文入りのThreads投稿画面を開きました。保存された動画・画像を画面へドラッグ＆ドロップして投稿してください。"
+    }
+  };
+
+  function isMobileOrTablet() {
+    const ua = navigator.userAgent || "";
+    if (/Android|iPhone|iPad|iPod/i.test(ua)) return true;
+    if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return true;
+    return false;
+  }
+  function canShareFile(file) {
+    try {
+      return !!(file && typeof navigator !== "undefined" && typeof navigator.share === "function" &&
+        typeof navigator.canShare === "function" && navigator.canShare({ files: [file] }));
+    } catch (e) {
+      return false;
+    }
+  }
+  const supportsFileShare = (() => {
+    try {
+      const probe = new File([new Uint8Array([0])], "probe.mp4", { type: "video/mp4" });
+      return canShareFile(probe);
+    } catch (e) {
+      return false;
+    }
+  })();
+
+  function toHashtagToken(raw) {
+    return String(raw || "")
+      .replace(/[^\p{L}\p{N}_ー]+/gu, "")
+      .trim();
+  }
+  function buildAutoCaption() {
+    const sym = (state.symptom || "").trim();
+    const age = (state.age || "").trim();
+    const clinic = (state.clinic || "").trim();
+    const sub = (state.sub || "").trim();
+
+    const lines = [sym ? `【${sym}のビフォーアフター】` : "【施術ビフォーアフター】"];
+    const meta = [age, sub].filter(Boolean).join("／");
+    if (meta) lines.push(meta);
+
+    lines.push("");
+    lines.push(sym
+      ? `同じような「${sym}」でお悩みの方はぜひ一度ご相談ください✨`
+      : "お身体の不調や姿勢のお悩みはお気軽にご相談ください✨");
+    if (clinic) lines.push(`📍 ${clinic}`);
+
+    const tags = [];
+    const addTag = (t) => {
+      const clean = toHashtagToken(t);
+      if (clean && !tags.includes(clean)) tags.push(clean);
+    };
+    if (sym) {
+      sym.split(/[・/／,、\s\u3000&＆＋+()（）【】「」『』]+/).forEach(addTag);
+    }
+    if (clinic) addTag(clinic);
+    ["ビフォーアフター", "整体", "姿勢改善"].forEach(addTag);
+
+    lines.push("");
+    lines.push(tags.slice(0, 8).map(t => "#" + t).join(" "));
+    return lines.join("\n");
+  }
+  function syncAutoCaption() {
+    const el = $("snsCaption");
+    if (!el || captionEdited) return;
+    el.value = buildAutoCaption();
+  }
+  function getCaptionText() {
+    const el = $("snsCaption");
+    const val = el ? el.value.trim() : "";
+    return val || buildAutoCaption();
+  }
+
+  function copyTextFallbackSync(text) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;left:0;top:0;opacity:0;pointer-events:none";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch (e) {
+      return false;
+    }
+  }
+  // ユーザージェスチャー（window.open / navigator.share）を失わないよう await せず即座にコピーを発火
+  function copyTextImmediate(text) {
+    if (!text) return false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => { copyTextFallbackSync(text); });
+        return true;
+      }
+    } catch (e) {}
+    return copyTextFallbackSync(text);
+  }
+  async function copyTextAsync(text) {
+    if (!text) return false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) {}
+    return copyTextFallbackSync(text);
+  }
+
+  function setPendingSns(target) {
+    pendingSnsTarget = target || null;
+    document.querySelectorAll("[data-sns]").forEach((b) => {
+      b.classList.toggle("pending-ready", b.dataset.sns === pendingSnsTarget);
+    });
+    const nb = $("btnNativeShare");
+    if (nb) nb.classList.toggle("pending-ready", pendingSnsTarget === "native");
+  }
+
+  function initSnsUI() {
+    const nb = $("btnNativeShare");
+    const hint = $("snsHint");
+    const mobile = isMobileOrTablet();
+    if (nb) {
+      if (supportsFileShare) {
+        nb.hidden = false;
+        nb.textContent = mobile
+          ? "📲 スマホアプリ／カメラロールへ直接送る"
+          : "📲 AirDrop／共有メニューでスマホへ送る";
+      } else {
+        nb.hidden = true;
+      }
+    }
+    if (hint) {
+      hint.textContent = (mobile && supportsFileShare)
+        ? "ボタンを押すと共有シートが開き、選んだSNSアプリへ動画を直接渡せます（投稿文も自動コピーされます）。"
+        : "ボタンを押すと投稿文を自動コピーして各SNSの投稿画面を開きます。保存された動画・画像をドラッグ＆ドロップして投稿してください。";
+    }
+    refreshSnsUI();
+  }
+
+  function refreshSnsUI() {
+    const badge = $("snsReadyBadge");
+    if (!badge) return;
+    const ready = isExportFresh();
+    if (!ready && pendingSnsTarget) setPendingSns(null);
+    if (ready === lastSnsUiReady) return;
+    lastSnsUiReady = ready;
+    badge.classList.toggle("ready", ready);
+    badge.textContent = ready ? "✅ 準備OK（ワンタップで投稿）" : "自動書き出し＋投稿文コピー";
+  }
+
+  function openSnsWebPage(platform, exp, caption) {
+    const meta = SNS_META[platform];
+    if (!meta) return;
+    const url = meta.buildUrl(caption, exp ? exp.kind : currentExportMode());
+    window.open(url, "_blank", "noopener,noreferrer");
+    copyTextImmediate(caption);
+    if (exp && !exp.downloaded) {
+      download(exp.blob, exp.filename);
+      exp.downloaded = true;
+    }
+    setPendingSns(null);
+    setMsg(meta.pcGuide, "ok");
+  }
+
+  async function shareViaNativeSheet(exp, caption, targetLabel) {
+    if (!exp || !exp.file || !canShareFile(exp.file)) return "unsupported";
+    copyTextImmediate(caption);
+    try {
+      await navigator.share({ files: [exp.file] });
+      setPendingSns(null);
+      setMsg(targetLabel
+        ? `📲 共有シートを開きました（投稿文もコピー済みです。「${targetLabel}」を選んで貼り付けてください）。`
+        : "📲 共有シートを開きました（投稿文もクリップボードにコピー済みです）。", "ok");
+      return "shared";
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        setPendingSns(null);
+        setMsg("📋 投稿文はコピー済みです。もう一度ボタンを押すと共有シートを開けます。", "ok");
+        return "aborted";
+      }
+      if (err && err.name === "NotAllowedError") {
+        return "gesture_expired";
+      }
+      return "failed";
+    }
+  }
+
+  async function handleSnsAction(platform) {
+    const meta = SNS_META[platform];
+    if (!meta) return;
+    if (state.exporting) {
+      setMsg("現在書き出し中です。完了するまで少しお待ちください。");
+      return;
+    }
+    if (!state.panels.before.el && !state.panels.after.el) {
+      setMsg("先に「1. 写真・動画を選ぶ」でビフォー／アフターの画像か動画を追加してください。", "err");
+      return;
+    }
+
+    const caption = getCaptionText();
+    const mobileShare = isMobileOrTablet() && supportsFileShare;
+
+    if (isExportFresh()) {
+      if (mobileShare && lastExport.file && canShareFile(lastExport.file)) {
+        const res = await shareViaNativeSheet(lastExport, caption, meta.label);
+        if (res === "unsupported" || res === "failed") {
+          openSnsWebPage(platform, lastExport, caption);
+        }
+        return;
+      }
+      openSnsWebPage(platform, lastExport, caption);
+      return;
+    }
+
+    const tStart = performance.now();
+    const exp = await runCurrentExport({ download: !mobileShare });
+    if (!exp) return;
+
+    if (mobileShare && exp.file && canShareFile(exp.file)) {
+      const res = await shareViaNativeSheet(exp, caption, meta.label);
+      if (res === "gesture_expired") {
+        setPendingSns(platform);
+        setMsg(`✅ 動画の準備完了＆投稿文をコピーしました！光っている「${meta.label}」をもう一度タップするとアプリへ送れます。`, "ok");
+      } else if (res === "unsupported" || res === "failed") {
+        if (!exp.downloaded) { download(exp.blob, exp.filename); exp.downloaded = true; }
+        setPendingSns(platform);
+        setMsg(`✅ 保存＆投稿文をコピーしました！もう一度「${meta.label}」をタップすると投稿画面が開きます。`, "ok");
+      }
+      return;
+    }
+
+    await copyTextAsync(caption);
+    if (performance.now() - tStart < 1500) {
+      openSnsWebPage(platform, exp, caption);
+    } else {
+      setPendingSns(platform);
+      setMsg(`✅ 動画を保存＆投稿文をコピーしました！光っている「${meta.label}」ボタンをもう一度押すと投稿画面が開きます。`, "ok");
+    }
+  }
+
+  async function handleNativeShare() {
+    if (state.exporting) {
+      setMsg("現在書き出し中です。完了するまで少しお待ちください。");
+      return;
+    }
+    if (!state.panels.before.el && !state.panels.after.el) {
+      setMsg("先に「1. 写真・動画を選ぶ」でビフォー／アフターの画像か動画を追加してください。", "err");
+      return;
+    }
+    const caption = getCaptionText();
+    if (isExportFresh() && lastExport.file && canShareFile(lastExport.file)) {
+      const res = await shareViaNativeSheet(lastExport, caption, "");
+      if (res === "unsupported" || res === "failed") {
+        if (!lastExport.downloaded) { download(lastExport.blob, lastExport.filename); lastExport.downloaded = true; }
+        setMsg("共有メニューを開けなかったため、ファイルを保存しました。", "err");
+      }
+      return;
+    }
+    const exp = await runCurrentExport({ download: false });
+    if (!exp) return;
+    const res = await shareViaNativeSheet(exp, caption, "");
+    if (res === "gesture_expired") {
+      setPendingSns("native");
+      setMsg("✅ 準備完了＆投稿文をコピーしました！光っている共有ボタンをもう一度押すと開きます。", "ok");
+    } else if (res === "unsupported" || res === "failed") {
+      if (!exp.downloaded) { download(exp.blob, exp.filename); exp.downloaded = true; }
+      setMsg("ファイルを保存し、投稿文をコピーしました。", "ok");
     }
   }
 
@@ -2053,6 +2436,7 @@
       $(id).addEventListener("input", (e) => {
         state[key] = e.target.value.trim();
         if (key === "clinic") saveSettings();
+        syncAutoCaption();
         markDirty();
       }));
 
@@ -2186,10 +2570,12 @@
       state.bgm.volume = clamp(parseFloat(e.target.value) || 0.7, 0.1, 1);
       if (bgmPreview) bgmPreview.setVolume(state.bgm.volume);
       saveSettings();
+      refreshSnsUI();
     };
     $("selPhotoSec").onchange = (e) => {
       state.bgm.photoSec = parseInt(e.target.value, 10) || 8;
       saveSettings();
+      refreshSnsUI();
     };
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
@@ -2227,13 +2613,32 @@
     };
     $("btnLogoClear").onclick = clearLogo;
 
-    $("selQuality").onchange = (e) => { if (e.target.value === "1080" && !requirePro("1080×1920 高画質")) e.target.value = "720"; };
+    $("selQuality").onchange = (e) => {
+      if (e.target.value === "1080" && !requirePro("1080×1920 高画質")) e.target.value = "720";
+      refreshSnsUI();
+    };
+    $("selAudio").onchange = () => refreshSnsUI();
 
     $("btnPlay").onclick = () => setPlaying(!state.playing);
     $("btnRestart").onclick = restartVideos;
     $("chkGuide").onchange = (e) => { state.guide = e.target.checked; markDirty(); };
-    $("btnPng").onclick = savePng;
-    $("btnSave").onclick = () => ((videos().length || state.bgm.enabled) ? saveVideo() : savePng());
+    $("btnPng").onclick = () => savePng();
+    $("btnSave").onclick = () => runCurrentExport();
+
+    document.querySelectorAll("[data-sns]").forEach((btn) => {
+      btn.onclick = () => handleSnsAction(btn.dataset.sns);
+    });
+    $("btnNativeShare").onclick = handleNativeShare;
+    $("snsCaption").addEventListener("input", () => { captionEdited = true; });
+    $("btnCopyCaption").onclick = async () => {
+      const ok = await copyTextAsync(getCaptionText());
+      setMsg(ok ? "📋 投稿文とハッシュタグをコピーしました。" : "投稿文を選択してコピーしてください。", ok ? "ok" : "");
+    };
+    $("btnResetCaption").onclick = () => {
+      captionEdited = false;
+      syncAutoCaption();
+      setMsg("🔄 入力内容から投稿文とハッシュタグを再生成しました。", "ok");
+    };
 
     $("btnUpgrade").onclick = () => openModal();
     $("btnPlanBarUpgrade").onclick = () => openModal();

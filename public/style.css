@@ -204,3 +204,56 @@ hr{border:none;border-top:1px solid var(--line);margin:16px 0}
 .quiet-next-btn{background:none;border:1px solid #2a2f3a;color:var(--sub);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;font-family:inherit}
 .quiet-next-btn:hover:not(:disabled){color:var(--text);border-color:#3d4454}
 .quiet-next-btn:disabled{opacity:.38;cursor:not-allowed}
+
+/* ---- 各種SNS投稿・共有パネル ---- */
+.sns-box{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.sns-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.sns-head h3{margin:0;font-size:13.5px;color:var(--text)}
+.sns-badge{font-size:11px;padding:2px 9px;border-radius:99px;background:#12151b;border:1px solid var(--line);color:var(--sub);font-weight:700}
+.sns-badge.ready{background:rgba(53,194,138,.16);border-color:rgba(53,194,138,.45);color:var(--ok)}
+
+.sns-native-btn{width:100%;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px;
+  background:#172233;border-color:#2f4a73;color:#d6e7ff;font-size:13px;padding:10px 12px}
+.sns-native-btn:hover:not(:disabled){background:#1e2c42;border-color:#4469a1}
+
+.sns-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:10px}
+@media(max-width:500px){.sns-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.sns-btn{appearance:none;background:#12151b;border:1px solid var(--line);border-radius:11px;padding:10px 4px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  color:var(--text);font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit;
+  transition:transform .12s,border-color .15s,background .15s}
+.sns-btn svg{width:20px;height:20px;display:block;flex-shrink:0}
+.sns-btn span{line-height:1.2;white-space:nowrap}
+.sns-btn:hover:not(:disabled){transform:translateY(-1px)}
+.sns-btn:disabled{opacity:.45;cursor:not-allowed}
+
+.sns-btn.yt svg{color:#ff2b2b}
+.sns-btn.yt:hover:not(:disabled){border-color:rgba(255,43,43,.65);background:rgba(255,43,43,.1)}
+.sns-btn.ig svg{color:#e1306c}
+.sns-btn.ig:hover:not(:disabled){border-color:rgba(225,48,108,.65);background:rgba(225,48,108,.1)}
+.sns-btn.fb svg{color:#1877f2}
+.sns-btn.fb:hover:not(:disabled){border-color:rgba(24,119,242,.65);background:rgba(24,119,242,.1)}
+.sns-btn.x svg{color:#eef0f4}
+.sns-btn.x:hover:not(:disabled){border-color:#7d8699;background:rgba(255,255,255,.07)}
+.sns-btn.th svg{color:#eef0f4}
+.sns-btn.th:hover:not(:disabled){border-color:#7d8699;background:rgba(255,255,255,.07)}
+
+@keyframes snsReadyPulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(53,194,138,.45)}
+  50%{box-shadow:0 0 0 5px rgba(53,194,138,.12)}
+}
+.sns-btn.pending-ready,.sns-native-btn.pending-ready{
+  border-color:var(--ok) !important;
+  background:rgba(53,194,138,.15) !important;
+  animation:snsReadyPulse 1.5s infinite;
+}
+
+.sns-caption-details{background:#12151b;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.sns-caption-details summary{cursor:pointer;font-size:12.5px;font-weight:700;color:var(--sub);user-select:none}
+.sns-caption-details[open] summary{color:var(--text)}
+.sns-caption-body textarea{width:100%;margin-top:8px;padding:9px 10px;border-radius:8px;border:1px solid var(--line);
+  background:#0f1115;color:var(--text);font-size:13px;line-height:1.55;font-family:inherit;resize:vertical}
+.sns-caption-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.sns-caption-actions .btn.tiny{margin:0}
+.sns-hint{margin-top:8px;line-height:1.5}
