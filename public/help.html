@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
 
@@ -26,9 +26,19 @@
 
   <!-- よくある質問（使い方・トラブル解決） -->
   <details class="faq-item" open>
+    <summary>Q. 患者様の顔ぼかしが自動追従しない場合（横顔・後ろ姿の姿勢や歩行動画など）は？</summary>
+    <div class="faq-body">
+      正面〜斜め顔が映っている写真・動画はAIが自動で顔を検出して追従します。<br>
+      <strong>横向き姿勢や後ろ姿の歩行など、正面顔が映らない動画</strong>では以下の対処法をご用意しています。<br>
+      1. <strong>指定位置からの頭自動追従</strong>：プレビュー画面上のぼかしの丸を患者様の頭の位置にドラッグして合わせ、<strong>「🎯 今の丸の位置から追従」</strong>ボタンを押すと、その頭の色・形を基準に動画全体へ自動追従します。<br>
+      2. <strong>手動で位置を固定</strong>：立ち姿勢の写真や頭の位置が動かない動画では、<strong>「📌 手動で位置を固定」</strong>を選んでお好みの位置・大きさに固定できます。
+    </div>
+  </details>
+
+  <details class="faq-item">
     <summary>Q. 歩行動画などの「動き始め」がビフォーとアフターでズレる場合は？</summary>
     <div class="faq-body">
-      動画を読み込むと自動で動き始めを解析して揃えますが、撮影時の手ブレ等でタイミングを調整したい場合は、画面下部の<strong>「細かい調整（ズーム・位置・配色・画質・ロゴ）」→「動画の動き始めを揃える」</strong>を開き、左右それぞれの<strong>「-0.1秒 ／ +0.1秒」ボタンまたはスライダー</strong>で微調整できます。
+      動画を読み込むと自動で動き始めを解析して揃えますが、撮影時の手ブレ等でタイミングを調整したい場合は、画面下部の<strong>「⚙ 詳細設定（必要な時だけ）」→「写真・動画の調整」</strong>を開き、左右それぞれの<strong>「-0.1秒 ／ +0.1秒」ボタンまたはスライダー</strong>で微調整できます。
     </div>
   </details>
 
@@ -44,7 +54,7 @@
   <details class="faq-item">
     <summary>Q. プレビュー再生で自動BGMの音が出ないのはなぜですか？</summary>
     <div class="faq-body">
-      iPad・iPhone等の誤爆音防止のため、通常のプレビューではミュートになっており、<strong>「🎧 試聴」ボタンを押したときだけBGMが再生</strong>されます。試聴ボタンを押さなくても、「🎵 自動アップテンポBGMを入れる」にチェックが入っていれば<strong>保存される動画ファイルには自動的にBGMが入ります</strong>（マナーモード中は試聴音が出ない場合があります）。
+      iPad・iPhone等の誤爆音防止のため、通常のプレビューではミュートになっており、<strong>「🎧 試聴」ボタンを押したときだけBGMが再生</strong>されます。試聴ボタンを押さなくても、「🎵 自動BGM（アップテンポ）」にチェックが入っていれば<strong>保存される動画ファイルには自動的にBGMが入ります</strong>（マナーモード中は試聴音が出ない場合があります）。
     </div>
   </details>
 
@@ -73,7 +83,7 @@
   <details class="faq-item">
     <summary>Q. 患者様の動画や写真が外部サーバーに保存される心配はありませんか？</summary>
     <div class="faq-body">
-      ご安心ください。BAメーカーに読み込んだ画像・動画・院ロゴのデータは<strong>すべてお使いの端末（ブラウザ）内だけで合成・書き出し処理</strong>され、当社のサーバーへアップロード・保存されることは一切ありません。
+      ご安心ください。BAメーカーに読み込んだ画像・動画・院ロゴ・顔ぼかし解析のデータは<strong>すべてお使いの端末（ブラウザ）内だけで合成・書き出し処理</strong>され、当社のサーバーへアップロード・保存されることは一切ありません。
     </div>
   </details>
 
@@ -102,10 +112,10 @@
         <h3>【ご確認 1/3】有料プランを解約すると以下の機能がすべて停止します</h3>
         <p style="margin:0;font-size:12.5px;color:var(--sub)">解約手続きを完了すると次回以降の請求が停止し、すべての登録端末で即時にライセンスが終了して無料プランへ切り替わります。</p>
         <ul class="cancel-loss-list">
-          <li><strong>院名下の透かし非表示が終了</strong>し、「BAメーカー 無料版」の透かしがすべての動画・画像に入ります</li>
-          <li><strong>1080×1920 フルHD高画質書き出しが利用不可</strong>になり、720×1280画質に制限されます</li>
-          <li><strong>最大90秒の長尺リール出力</strong>が30秒までに制限されます</li>
-          <li><strong>院のロゴ挿入・有料カラーテーマ・自由配色</strong>がすべてリセットされます</li>
+          <li><strong>患者様のAI顔ぼかし追従・姿勢基準線・赤丸／矢印スタンプ</strong>での書き出しが停止します</li>
+          <li><strong>動画ラスト2秒の予約・LINE誘導カット</strong>および<strong>上下分割・スライド比較・4:5／1:1サイズ切替</strong>が利用不可になります</li>
+          <li><strong>免責テロップ・症状別テンプレート保存・SNS固定フッター</strong>が利用不可になります</li>
+          <li><strong>院名下の透かし非表示・1080pフルHD高画質・最大90秒出力・院ロゴ挿入・自由配色</strong>がすべて終了します</li>
           <li><strong>最大2台の端末登録枠</strong>が失効します</li>
         </ul>
         <div class="cancel-actions">
@@ -148,7 +158,7 @@
         <p style="margin:0 0 8px;font-size:12.5px;color:var(--sub)">トラブル防止のため、以下の2項目をご確認のうえチェックを入れてください。</p>
         <div class="agree-checks">
           <label><input type="checkbox" id="chkCancelAgree1"> 解約手続き完了後はただちに無料プランへ戻り、書き出し動画・画像に「BAメーカー 無料版」の透かしが入ることを確認しました。</label>
-          <label><input type="checkbox" id="chkCancelAgree2"> 登録済みの全端末（最大2台）で1080×1920フルHD出力・ロゴ挿入・有料テーマが利用できなくなり、日割り返金はないことを確認しました。</label>
+          <label><input type="checkbox" id="chkCancelAgree2"> 登録済みの全端末（最大2台）で1080pフルHD出力・AI顔ぼかし追従・姿勢基準線・誘導カット・ロゴ挿入などの全有料機能が停止し、日割り返金はないことを確認しました。</label>
         </div>
         <div class="cancel-actions">
           <button type="button" id="btnAbortStep3" class="btn primary">⭐ 解約をやめて有料プランを継続する</button>
@@ -186,7 +196,7 @@
   <p class="footer-copy">© 2026 整体院 導 AI Systems</p>
 </footer>
 
-<script src="config.js?v=12"></script>
-<script src="help.js?v=12"></script>
+<script src="config.js?v=15"></script>
+<script src="help.js?v=15"></script>
 </body>
 </html>

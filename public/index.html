@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
 
@@ -26,7 +26,7 @@
   <!-- プレビュー -->
   <section class="preview-col">
     <div class="preview-wrap">
-      <canvas id="preview" width="540" height="960"></canvas>
+      <canvas id="preview" width="540" height="960" data-aspect="9:16"></canvas>
     </div>
     <div class="preview-controls">
       <button id="btnRestart" class="btn small">⏮ 頭出し</button>
@@ -55,6 +55,120 @@
       <label>院名（自動保存）<input id="inClinic" type="text" maxlength="30" placeholder="例：整体院 導"></label>
     </div>
 
+    <div class="card pro-tools-card">
+      <div class="pro-tools-head">
+        <h2><span class="step pro-step">★</span> プロ演出・プライバシー保護</h2>
+        <span id="proToolsBadge" class="try-pill">プレビューでお試しOK</span>
+      </div>
+
+      <!-- ⑥ 出力サイズ（比率） ＆ ④ レイアウト切替 -->
+      <div class="seg-group">
+        <span class="seg-label">サイズ比率</span>
+        <div class="seg-row">
+          <button type="button" class="seg-btn active" data-aspect="9:16">9:16 リール</button>
+          <button type="button" class="seg-btn" data-aspect="4:5">⭐ 4:5 投稿</button>
+          <button type="button" class="seg-btn" data-aspect="1:1">⭐ 1:1 正方形・HP</button>
+        </div>
+      </div>
+      <div class="seg-group">
+        <span class="seg-label">比較レイアウト</span>
+        <div class="seg-row">
+          <button type="button" class="seg-btn active" data-layout="split-h">左右2分割</button>
+          <button type="button" class="seg-btn" data-layout="split-v">⭐ 上下2分割</button>
+          <button type="button" class="seg-btn" data-layout="wipe">⭐ スライド比較</button>
+        </div>
+      </div>
+
+      <!-- ① 顔ぼかし（自動追従＋自動追従できない時の対処法） -->
+      <div class="feat-box">
+        <label class="feat-toggle">
+          <input type="checkbox" id="chkFaceBlur">
+          <span>😶 患者様の顔をぼかす（AI自動追従）</span>
+          <em class="pro-tag">⭐有料</em>
+        </label>
+        <div id="faceBlurBody" class="feat-body" hidden>
+          <p class="hint" style="margin:0 0 8px">正面顔はAIが自動追従します。<strong>横顔・後ろ姿などで自動検出できない場合</strong>は、プレビュー上の丸を頭にドラッグして<strong>「🎯 今の丸の位置から追従」</strong>または<strong>「📌 位置を固定」</strong>を選べます。</p>
+          <div class="two">
+            <div class="slot">
+              <label class="check"><input type="checkbox" id="chkBlurBefore" checked> <span class="tag before">BEFORE</span> ぼかし</label>
+              <select id="selBlurModeBefore" class="compact-sel">
+                <option value="auto">🎯 AI自動追従</option>
+                <option value="patch">👣 指定位置から頭を追従</option>
+                <option value="fixed">📌 手動で位置を固定</option>
+              </select>
+              <label class="slider">大きさ<input type="range" min="0.55" max="2.3" step="0.05" value="1" id="blurSizeBefore"></label>
+              <button type="button" id="btnRetrackBefore" class="btn tiny">🎯 今の丸の位置から追従</button>
+              <div id="blurStatusBefore" class="blur-status">待機中</div>
+            </div>
+            <div class="slot">
+              <label class="check"><input type="checkbox" id="chkBlurAfter" checked> <span class="tag after">AFTER</span> ぼかし</label>
+              <select id="selBlurModeAfter" class="compact-sel">
+                <option value="auto">🎯 AI自動追従</option>
+                <option value="patch">👣 指定位置から頭を追従</option>
+                <option value="fixed">📌 手動で位置を固定</option>
+              </select>
+              <label class="slider">大きさ<input type="range" min="0.55" max="2.3" step="0.05" value="1" id="blurSizeAfter"></label>
+              <button type="button" id="btnRetrackAfter" class="btn tiny">🎯 今の丸の位置から追従</button>
+              <div id="blurStatusAfter" class="blur-status">待機中</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ② 姿勢チェック基準線・注目スタンプ（赤丸・矢印） -->
+      <div class="feat-box">
+        <div class="feat-head-static">
+          <span>📏 姿勢チェック基準線・注目スタンプ</span>
+          <em class="pro-tag">⭐有料</em>
+        </div>
+        <div class="posture-checks">
+          <label class="check"><input type="checkbox" id="chkPostureGrid"> 方眼グリッド＋中心線</label>
+          <label class="check"><input type="checkbox" id="chkPostureLines"> 肩・骨盤の高さ比較ライン（上下ドラッグ可）</label>
+        </div>
+        <div class="marker-bar">
+          <button type="button" id="btnAddCircle" class="btn tiny">＋ ⭕ 赤丸を追加</button>
+          <button type="button" id="btnAddArrow" class="btn tiny">＋ ➡ 矢印を追加</button>
+          <button type="button" id="btnRotateMarker" class="btn tiny" hidden>↻ 矢印の向き変更</button>
+          <button type="button" id="btnClearMarkers" class="btn tiny" hidden>🗑 スタンプ全消去</button>
+        </div>
+      </div>
+
+      <!-- ③ 動画ラスト2秒の予約・LINE誘導エンドカード（リール特化・QRなし） -->
+      <div class="feat-box">
+        <label class="feat-toggle">
+          <input type="checkbox" id="chkEndCard">
+          <span>🎬 動画ラスト2秒に「予約・LINE誘導カット」を挿入</span>
+          <em class="pro-tag">⭐有料</em>
+        </label>
+        <div id="endCardBody" class="feat-body" hidden>
+          <label>地域・最寄り駅（自動保存）<input id="inEndArea" type="text" maxlength="32" placeholder="例：〇〇市・〇〇駅 徒歩3分"></label>
+          <label>初回オファー・見出し（自動保存）<input id="inEndOffer" type="text" maxlength="42" placeholder="例：通常価格 13,000円 → 初回限定特別価格 1,980円（税込）"></label>
+          <label>誘導アクション文（自動保存）<input id="inEndCta" type="text" maxlength="36" value="ご予約はプロフィールの公式LINEから ▶"></label>
+          <button type="button" id="btnPreviewEndCard" class="btn tiny">👁 プレビューで誘導カットを確認</button>
+        </div>
+      </div>
+
+      <!-- ⑤ 免責ミニテロップ ＆ 症状別テンプレート保存 -->
+      <div class="feat-box">
+        <label class="feat-toggle">
+          <input type="checkbox" id="chkDisclaimer">
+          <span>※ 免責ミニテロップを表示（「個人差があります」等）</span>
+          <em class="pro-tag">⭐有料</em>
+        </label>
+        <div id="disclaimerBody" class="feat-body" hidden>
+          <input id="inDisclaimer" type="text" maxlength="45" value="※施術効果には個人差があります">
+        </div>
+        <div class="preset-box">
+          <div class="preset-head">📋 症状別テンプレート（現在の文字・配色・演出を保存） <em class="pro-tag">⭐有料</em></div>
+          <div class="preset-save-row">
+            <input id="inPresetName" type="text" maxlength="20" placeholder="例：腰痛用テンプレ">
+            <button type="button" id="btnSavePreset" class="btn small">💾 保存</button>
+          </div>
+          <div id="presetList" class="preset-list"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <h2><span class="step">3</span> 保存・SNS投稿する</h2>
       <div class="bgm-box">
@@ -70,6 +184,13 @@
       <div id="planBar" class="plan-bar free">
         <span id="planBarText">無料プラン：720p画質・院名下に透かしが入ります</span>
         <button type="button" id="btnPlanBarUpgrade" class="btn tiny">⭐ 透かしを消す</button>
+      </div>
+      <div id="proTrialBar" class="trial-bar" hidden>
+        <div id="proTrialText" class="trial-bar-text">⭐ 有料機能をお試し中です</div>
+        <div class="trial-bar-actions">
+          <button type="button" id="btnTrialUpgrade" class="btn tiny trial-upg">⭐ 有料プランでこのまま保存</button>
+          <button type="button" id="btnTrialReset" class="btn tiny">有料機能をオフに戻す</button>
+        </div>
       </div>
       <button id="btnSave" class="btn primary big">💾 動画で保存する（🎵BGM付き）</button>
       <div class="progress" id="progressBox" hidden><div id="progressBar"></div></div>
@@ -115,6 +236,9 @@
               <button type="button" id="btnCopyCaption" class="btn tiny">📋 投稿文だけコピー</button>
               <button type="button" id="btnResetCaption" class="btn tiny">🔄 自動生成に戻す</button>
             </div>
+            <label class="sns-footer-label">📌 院の固定フッター（予約LINE・住所・営業時間など自動追加 <em class="pro-tag">⭐有料</em>）
+              <textarea id="inSnsFooter" rows="3" maxlength="400" placeholder="例：ご予約はプロフィールの公式LINEから24時間受付中✨&#10;〇〇駅徒歩3分／営業時間 9:00〜20:00"></textarea>
+            </label>
           </div>
         </details>
         <p id="snsHint" class="hint sns-hint"></p>
@@ -253,17 +377,20 @@
         <thead><tr><th>機能</th><th>無料</th><th>⭐ 有料</th></tr></thead>
         <tbody>
           <tr><td>リール用9:16・画像／動画比較</td><td>○</td><td>○</td></tr>
-          <tr><td>動き始め自動同期・自動BGM</td><td>○</td><td>○</td></tr>
-          <tr><td>書き出し画質</td><td>720×1280</td><td>1080×1920</td></tr>
-          <tr><td>動画の長さ</td><td>30秒まで</td><td>90秒まで</td></tr>
-          <tr><td>院名下の透かし表示</td><td>あり</td><td>なし</td></tr>
-          <tr><td>カラーテーマ</td><td>2種</td><td>5種＋自由配色</td></tr>
-          <tr><td>院のロゴ挿入</td><td>—</td><td>○</td></tr>
-          <tr><td>同時利用できる端末数</td><td>—</td><td>最大2台まで</td></tr>
-          <tr><td>キー発行・プラン反映</td><td>—</td><td>自動メール／自動切替</td></tr>
+          <tr><td>動き始め自動同期・自動BGM・SNS投稿</td><td>○</td><td>○</td></tr>
+          <tr><td>書き出し画質</td><td>720p標準</td><td>1080pフルHD</td></tr>
+          <tr><td>サイズ切替（4:5投稿・1:1正方形/HP）</td><td>9:16のみ</td><td>○ 全3サイズ</td></tr>
+          <tr><td>比較レイアウト（上下2分割・スライド比較）</td><td>左右のみ</td><td>○ 全3種</td></tr>
+          <tr><td>😶 顔ぼかし（AI自動追従＋横顔/手動対応）</td><td>—</td><td>○</td></tr>
+          <tr><td>📏 姿勢基準線・赤丸／矢印スタンプ</td><td>—</td><td>○</td></tr>
+          <tr><td>🎬 ラスト2秒の予約・LINE誘導カット</td><td>—</td><td>○</td></tr>
+          <tr><td>免責テロップ・症状テンプレ・固定フッター</td><td>—</td><td>○</td></tr>
+          <tr><td>動画の長さ ／ 透かし表示</td><td>30秒／あり</td><td>90秒／なし</td></tr>
+          <tr><td>カラー配色・院ロゴ ／ 同時利用端末</td><td>2種／—</td><td>自由配色＋ロゴ／2台</td></tr>
         </tbody>
       </table>
       <a id="btnBuy" class="btn primary block" target="_blank" rel="noopener">💳 有料プランに申し込む（キー自動送信）</a>
+      <button type="button" id="btnModalResetTrial" class="btn small block modal-reset-btn" hidden>有料機能をオフに戻して無料版で保存する</button>
       <p id="buyNote" class="hint"></p>
       <p class="legal-agree">お申し込みにより <a href="terms.html" target="_blank">利用規約</a>・<a href="privacy.html" target="_blank">プライバシーポリシー</a>・<a href="tokushoho.html" target="_blank">特定商取引法に基づく表記</a> に同意したものとみなされます。</p>
 
@@ -295,7 +422,7 @@
       </div>
 
       <div class="pro-perks">
-        ✔ 透かしなし ／ ✔ 1080×1920 フルHD ／ ✔ 最大90秒 ／ ✔ 全テーマ＆自由配色 ／ ✔ 院ロゴ挿入
+        ✔ 透かしなし・1080pフルHD ／ ✔ AI顔ぼかし追従 ／ ✔ 姿勢基準線・赤丸＆矢印 ／ ✔ ラスト2秒の予約・LINE誘導カット ／ ✔ 上下分割・スライド比較 ／ ✔ 4:5・1:1サイズ切替 ／ ✔ 免責・症状別テンプレ・SNS固定フッター ／ ✔ 最大90秒・全テーマ＆自由配色・院ロゴ挿入
       </div>
 
       <div class="pro-release-box">
@@ -314,9 +441,10 @@
   </div>
 </div>
 
-<script src="config.js?v=14"></script>
-<script src="bgm.js?v=14"></script>
-<script src="motion.js?v=14"></script>
-<script src="app.js?v=14"></script>
+<script src="config.js?v=15"></script>
+<script src="bgm.js?v=15"></script>
+<script src="motion.js?v=15"></script>
+<script src="face.js?v=15"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

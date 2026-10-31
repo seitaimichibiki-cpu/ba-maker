@@ -3,14 +3,60 @@
   const CFG = window.BAM_CONFIG;
   const $ = (id) => document.getElementById(id);
 
-  // ---------- 定数（論理座標は 1080x1920 固定） ----------
-  const LW = 1080, LH = 1920;
-  const TOP_H = 360;                 // 上部帯（症状・年齢）
-  const BOTTOM_Y = 1500;             // 下部帯の開始位置（院名）
-  const GAP = 6;                     // 左右の仕切り
-  const PANEL_Y = TOP_H, PANEL_H = BOTTOM_Y - TOP_H;
-  const PANEL_W = (LW - GAP) / 2;
+  // ---------- 定数・アスペクト比別ジオメトリ（論理幅 LW=1080 基準） ----------
+  const LW = 1080;
+  const GAP = 6;
+  const END_CARD_ADD_SEC = 2.2;
   const FONT = '"Noto Sans JP","Hiragino Sans","Hiragino Kaku Gothic ProN",Meiryo,sans-serif';
+
+  const ASPECT_SPECS = {
+    "9:16": {
+      label: "9:16",
+      LH: 1920, topH: 360, bottomY: 1500,
+      pvW: 540, pvH: 960,
+      freeW: 720, freeH: 1280, proW: 1080, proH: 1920,
+      baseY: { symptom: 125, age: 250, clinic: 1590, sub: 1700 },
+      disclaimerY: 1868,
+      fonts: {
+        symptom: [132, 52], age: [64, 34, 40],
+        clinic: [88, 38, 120], sub: [48, 28],
+        disclaimer: [30, 22], badge: [54, 84]
+      }
+    },
+    "4:5": {
+      label: "4:5",
+      LH: 1350, topH: 230, bottomY: 1100,
+      pvW: 540, pvH: 675,
+      freeW: 720, freeH: 900, proW: 1080, proH: 1350,
+      baseY: { symptom: 82, age: 168, clinic: 1172, sub: 1256 },
+      disclaimerY: 1318,
+      fonts: {
+        symptom: [92, 42], age: [48, 28, 28],
+        clinic: [68, 34, 92], sub: [38, 24],
+        disclaimer: [26, 20], badge: [46, 72]
+      }
+    },
+    "1:1": {
+      label: "1:1",
+      LH: 1080, topH: 184, bottomY: 880,
+      pvW: 540, pvH: 540,
+      freeW: 720, freeH: 720, proW: 1080, proH: 1080,
+      baseY: { symptom: 66, age: 138, clinic: 942, sub: 1012 },
+      disclaimerY: 1054,
+      fonts: {
+        symptom: [76, 36], age: [42, 26, 22],
+        clinic: [58, 30, 78], sub: [34, 22],
+        disclaimer: [24, 18], badge: [42, 66]
+      }
+    }
+  };
+
+  const TEXT_SLIDERS = {
+    symptom: "posSymptomY",
+    age:     "posAgeY",
+    clinic:  "posClinicY",
+    sub:     "posSubY"
+  };
 
   const THEMES = {
     dark:  { name: "ダーク",   pro: false, bg: "#111111", text: "#ffffff", accent: "#ff5a5f" },
@@ -24,12 +70,6 @@
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
-  const TEXT_BASE = {
-    symptom: { x: LW / 2, y: 125,  slider: "posSymptomY" },
-    age:     { x: LW / 2, y: 250,  slider: "posAgeY" },
-    clinic:  { x: LW / 2, y: 1590, slider: "posClinicY" },
-    sub:     { x: LW / 2, y: 1700, slider: "posSubY" }
-  };
   const newTextPos = () => ({
     symptom: { dx: 0, dy: 0 },
     age:     { dx: 0, dy: 0 },
@@ -39,6 +79,7 @@
 
   const BGM = window.BAM_BGM;
   const MOTION = window.BAM_MOTION;
+  const FACE = window.BAM_FACE;
 
   // WebKit / Blink のオクルージョン間引き（背面隠蔽時のフレーム供給低下）を防ぐため、非隠蔽・極小（2x2px・不透明度0.4%）の前面透過レイヤーに配置
   const mediaPool = document.createElement("div");
@@ -53,15 +94,58 @@
   const warmCtx = warmCanvas.getContext("2d", { alpha: false });
 
   // ---------- 状態 ----------
+  const newBlur = () => ({
+    enabled: true,
+    mode: "auto",       // "auto" | "patch" | "fixed"
+    scale: 1,
+    fixedX: 0.5,
+    fixedY: 0.22,
+    baseR: 0.11,
+    offsetX: 0,
+    offsetY: 0,
+    keyframes: [],
+    status: "idle",     // "idle" | "tracking" | "ai_ok" | "patch_ok" | "fallback" | "fixed"
+    trackId: 0,
+    trackPromise: null
+  });
+
   const newPanel = () => ({
     type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0,
     trimStart: 0, autoTrimSec: 0, autoDetected: false,
     scanning: false, scanId: 0, scanPromise: null, audioSrc: null,
     holdCanvas: null, hasHold: false, warmed: false, warming: false,
-    frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null
+    frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null,
+    blur: newBlur()
   });
+
   const state = {
     symptom: "", age: "", clinic: "", sub: "",
+    aspect: "9:16",      // "9:16" | "4:5" | "1:1"
+    layout: "split-h",   // "split-h" | "split-v" | "wipe"
+    wipePos: 0.5,
+    wipeManual: false,
+    faceBlur: false,
+    posture: {
+      grid: false,
+      lines: false,
+      y1: 0.26,
+      y2: 0.56,
+      markers: [],       // [{ id, type: "circle" | "arrow", nx, ny, angle, scale }]
+      selectedId: 0
+    },
+    endCard: {
+      enabled: false,
+      area: "",
+      offer: "",
+      cta: "ご予約はプロフィールの公式LINEから ▶",
+      previewing: false
+    },
+    disclaimer: {
+      enabled: false,
+      text: "※施術効果には個人差があります"
+    },
+    snsFooter: "",
+    preferredSnsFooter: "",
     theme: "dark",
     preferredTheme: "dark",
     custom: { bg: "#111111", text: "#ffffff", accent: "#ff5a5f" },
@@ -73,6 +157,8 @@
     panels: { before: newPanel(), after: newPanel() }
   };
 
+  let markerSeq = 1;
+  let blurRingUntil = 0;
   let bgmPreview = null;
   let loopTimer = null;
   let scrubbingTrim = false;
@@ -86,6 +172,57 @@
   let pendingSnsTarget = null;
   let lastSnsUiReady = null;
   const fitCache = new Map();
+
+  function getSpec() {
+    return ASPECT_SPECS[state.aspect] || ASPECT_SPECS["9:16"];
+  }
+  function getGeom() {
+    const sp = getSpec();
+    return {
+      LW,
+      LH: sp.LH,
+      topH: sp.topH,
+      bottomY: sp.bottomY,
+      panelY: sp.topH,
+      panelH: sp.bottomY - sp.topH,
+      disclaimerY: sp.disclaimerY,
+      fonts: sp.fonts,
+      baseY: sp.baseY,
+      spec: sp
+    };
+  }
+  function getPanelFrame(which) {
+    const g = getGeom();
+    if (state.layout === "split-v") {
+      const h1 = Math.floor((g.panelH - GAP) / 2);
+      return which === "before"
+        ? { x: 0, y: g.panelY, w: LW, h: h1 }
+        : { x: 0, y: g.panelY + h1 + GAP, w: LW, h: g.panelH - h1 - GAP };
+    }
+    if (state.layout === "wipe") {
+      return { x: 0, y: g.panelY, w: LW, h: g.panelH };
+    }
+    const w = (LW - GAP) / 2;
+    return which === "before"
+      ? { x: 0, y: g.panelY, w, h: g.panelH }
+      : { x: w + GAP, y: g.panelY, w, h: g.panelH };
+  }
+  function getWipeRatio(opt) {
+    if (opt && typeof opt.wipeRatio === "number") {
+      return clamp(opt.wipeRatio, 0.08, 0.92);
+    }
+    if (opt && opt.staticWipe) {
+      return clamp(state.wipePos, 0.08, 0.92);
+    }
+    if (opt && typeof opt.wipeTime === "number") {
+      return clamp(0.5 - 0.36 * Math.sin(opt.wipeTime * (Math.PI * 2 / 3.4)), 0.12, 0.88);
+    }
+    if (state.playing && !state.wipeManual && !(drag && drag.kind === "wipe")) {
+      const t = performance.now() / 1000;
+      return clamp(0.5 - 0.36 * Math.sin(t * (Math.PI * 2 / 3.4)), 0.12, 0.88);
+    }
+    return clamp(state.wipePos, 0.08, 0.92);
+  }
 
   function markDirty() {
     previewDirty = true;
@@ -117,7 +254,7 @@
     $("bgmTitle").textContent = state.bgm.enabled ? "🎵 " + info.title : "BGMオフ（" + info.title + "）";
     $("chkBgm").checked = state.bgm.enabled;
     $("chkBgm").closest(".bgm-box").classList.toggle("off", !state.bgm.enabled);
-    const willVideo = Object.values(state.panels).some(p => p.type === "video") || state.bgm.enabled;
+    const willVideo = Object.values(state.panels).some(p => p.type === "video") || state.bgm.enabled || state.endCard.enabled;
     $("btnSave").textContent = willVideo
       ? (state.bgm.enabled ? "💾 動画で保存する（🎵BGM付き）" : "💾 動画で保存する")
       : "💾 画像（PNG）で保存する";
@@ -155,22 +292,33 @@
     }
   }
 
+  function textBaseFor(key) {
+    const g = getGeom();
+    return { x: LW / 2, y: g.baseY[key], slider: TEXT_SLIDERS[key] };
+  }
   function textXY(key) {
-    const b = TEXT_BASE[key], p = state.textPos[key];
+    const g = getGeom();
+    const b = textBaseFor(key), p = state.textPos[key];
     return {
       x: clamp(b.x + p.dx, 80, LW - 80),
-      y: clamp(b.y + p.dy, 60, LH - 60)
+      y: clamp(b.y + p.dy, 45, g.LH - 45)
     };
   }
   function syncTextSliders() {
-    Object.entries(TEXT_BASE).forEach(([k, b]) => {
-      const el = $(b.slider);
-      if (el) el.value = Math.round(textXY(k).y);
+    const g = getGeom();
+    Object.entries(TEXT_SLIDERS).forEach(([k, sliderId]) => {
+      const el = $(sliderId);
+      if (el) {
+        el.min = "45";
+        el.max = String(g.LH - 45);
+        el.value = Math.round(textXY(k).y);
+      }
     });
   }
 
-  // ---------- 設定の保存・復元 ----------
+  // ---------- 設定・テンプレートの保存・復元 ----------
   const LS_SETTINGS = "bam_settings_v1";
+  const LS_PRESETS = "bam_presets_v1";
   const isHex = (v) => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
 
   function saveSettings() {
@@ -181,7 +329,14 @@
         custom: state.custom,
         textPos: state.textPos,
         bgm: state.bgm,
-        autoSync: state.autoSync
+        autoSync: state.autoSync,
+        endCard: {
+          area: state.endCard.area,
+          offer: state.endCard.offer,
+          cta: state.endCard.cta
+        },
+        disclaimerText: state.disclaimer.text,
+        snsFooter: state.snsFooter || state.preferredSnsFooter || ""
       }));
     } catch (e) {}
   }
@@ -207,13 +362,14 @@
           state.theme = THEMES[d.theme].pro && !pro ? "dark" : d.theme;
         }
         if (d && d.textPos) {
-          Object.keys(TEXT_BASE).forEach((k) => {
-            const tp = d.textPos[k], b = TEXT_BASE[k];
+          const g = getGeom();
+          Object.keys(TEXT_SLIDERS).forEach((k) => {
+            const tp = d.textPos[k], b = textBaseFor(k);
             if (tp && typeof tp.dx === "number" && isFinite(tp.dx)) {
               state.textPos[k].dx = clamp(Math.round(tp.dx), 80 - b.x, LW - 80 - b.x);
             }
             if (tp && typeof tp.dy === "number" && isFinite(tp.dy)) {
-              state.textPos[k].dy = clamp(Math.round(tp.dy), 60 - b.y, LH - 60 - b.y);
+              state.textPos[k].dy = clamp(Math.round(tp.dy), 45 - b.y, g.LH - 45 - b.y);
             }
           });
         }
@@ -226,15 +382,32 @@
         if (d && typeof d.autoSync === "boolean") {
           state.autoSync = d.autoSync;
         }
+        if (d && d.endCard) {
+          if (typeof d.endCard.area === "string") state.endCard.area = d.endCard.area.slice(0, 32);
+          if (typeof d.endCard.offer === "string") state.endCard.offer = d.endCard.offer.slice(0, 42);
+          if (typeof d.endCard.cta === "string" && d.endCard.cta.trim()) state.endCard.cta = d.endCard.cta.slice(0, 36);
+        }
+        if (d && typeof d.disclaimerText === "string" && d.disclaimerText.trim()) {
+          state.disclaimer.text = d.disclaimerText.slice(0, 45);
+        }
+        if (d && typeof d.snsFooter === "string") {
+          state.preferredSnsFooter = d.snsFooter.slice(0, 400);
+        }
       }
     } catch (e) {}
     $("inClinic").value = state.clinic;
+    $("inEndArea").value = state.endCard.area;
+    $("inEndOffer").value = state.endCard.offer;
+    $("inEndCta").value = state.endCard.cta;
+    $("inDisclaimer").value = state.disclaimer.text;
+    $("inSnsFooter").value = state.snsFooter;
     $("bgmVol").value = state.bgm.volume;
     $("selPhotoSec").value = String(state.bgm.photoSec);
     $("chkAutoSync").checked = state.autoSync;
     syncTextSliders();
     refreshBgmUI();
     refreshTrimUI();
+    renderPresets();
     syncAutoCaption();
     initSnsUI();
   }
@@ -348,11 +521,95 @@
     return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
   }
 
+  function getActiveProFeatures() {
+    const list = [];
+    if (state.aspect !== "9:16") list.push(`サイズ切替(${state.aspect})`);
+    if (state.layout !== "split-h") list.push(state.layout === "wipe" ? "スライド比較" : "上下2分割");
+    if (state.faceBlur) list.push("AI顔ぼかし追従");
+    if (state.posture.grid || state.posture.lines || state.posture.markers.length > 0) list.push("姿勢基準線・スタンプ");
+    if (state.endCard.enabled) list.push("ラスト2秒誘導カット");
+    if (state.disclaimer.enabled) list.push("免責テロップ");
+    if ((state.snsFooter || "").trim().length > 0) list.push("SNS固定フッター");
+    return list;
+  }
+
+  function refreshQualityLabels() {
+    const sp = getSpec();
+    const selQ = $("selQuality");
+    if (selQ && selQ.options[0]) {
+      selQ.options[0].textContent = `${sp.freeW}×${sp.freeH}（無料）`;
+    }
+    const optHq = $("optHQ");
+    if (optHq) {
+      optHq.textContent = pro
+        ? `${sp.proW}×${sp.proH}（フルHD・高画質）`
+        : `🔒 ${sp.proW}×${sp.proH}（有料）`;
+    }
+    const bar = $("planBar");
+    if (bar) {
+      bar.className = "plan-bar " + (pro ? "pro" : "free");
+      $("planBarText").textContent = pro
+        ? `⭐ 有料プラン適用中：透かしなし・${sp.proW}×${sp.proH} 高画質`
+        : `無料プラン：${sp.freeW}×${sp.freeH}画質・院名下に透かしが入ります`;
+      $("btnPlanBarUpgrade").hidden = pro;
+    }
+    const limCfg = pro ? CFG.LIMITS.pro : CFG.LIMITS.free;
+    const outW = (pro && selQ && selQ.value === "1080") ? sp.proW : sp.freeW;
+    const outH = (pro && selQ && selQ.value === "1080") ? sp.proH : sp.freeH;
+    const lh = $("limitHint");
+    if (lh) {
+      lh.textContent =
+        `現在のプラン：${outW}×${outH}（${sp.label}） ／ 動画は最大${limCfg.maxSeconds}秒` +
+        (pro ? " ／ 透かしなし" : " ／ 院名下に透かしあり") +
+        "。MP4で保存できない環境ではWebMで保存されます。";
+    }
+  }
+
+  function refreshProTrialUI() {
+    document.body.classList.toggle("is-pro", pro);
+    const feats = getActiveProFeatures();
+    const badge = $("proToolsBadge");
+    if (badge) {
+      if (pro) {
+        badge.textContent = "⭐ 有料機能すべて解放済";
+        badge.className = "try-pill pro-unlocked";
+      } else if (feats.length > 0) {
+        badge.textContent = `⭐ お試し中（${feats.length}機能）`;
+        badge.className = "try-pill";
+      } else {
+        badge.textContent = "プレビューでお試しOK";
+        badge.className = "try-pill";
+      }
+    }
+    const tBar = $("proTrialBar");
+    if (tBar) {
+      if (!pro && feats.length > 0) {
+        tBar.hidden = false;
+        $("proTrialText").textContent = `⭐ 有料機能をお試し中：${feats.join("・")}（このまま保存するには有料プランが必要です）`;
+      } else {
+        tBar.hidden = true;
+      }
+    }
+    const mReset = $("btnModalResetTrial");
+    if (mReset) {
+      mReset.hidden = pro || feats.length === 0;
+    }
+  }
+
+  function checkProGateBeforeExport() {
+    if (pro) return true;
+    const feats = getActiveProFeatures();
+    if (!feats.length) return true;
+    openModal(`🔒 お試し中の有料機能（${feats.join("・")}）を含めて保存・SNS投稿するには、有料プラン（${CFG.PRO_PRICE_LABEL}）への切り替えが必要です。`);
+    return false;
+  }
+
   function syncModalView() {
     $("modalFreeView").hidden = pro;
     $("modalProView").hidden = !pro;
     $("priceLabel").textContent = CFG.PRO_PRICE_LABEL;
     $("priceNote").textContent = CFG.PRO_PRICE_NOTE;
+    refreshProTrialUI();
 
     const buy = $("btnBuy");
     if (CFG.PAYMENT_URL) {
@@ -409,16 +666,6 @@
     upg.textContent = pro ? "⚙ プラン・端末管理" : "⭐ 有料プラン / キー入力";
     upg.className = pro ? "btn small" : "btn primary small";
 
-    const bar = $("planBar");
-    if (bar) {
-      bar.className = "plan-bar " + (pro ? "pro" : "free");
-      $("planBarText").textContent = pro
-        ? "⭐ 有料プラン適用中：透かしなし・1080×1920 フルHD"
-        : "無料プラン：720p画質・院名下に透かしが入ります";
-      $("btnPlanBarUpgrade").hidden = pro;
-    }
-
-    $("optHQ").textContent = pro ? "1080×1920（フルHD・高画質）" : "🔒 1080×1920（有料）";
     $("btnLogo").textContent = pro ? "🖼 ロゴを追加" : "🔒 ロゴを追加（有料）";
 
     if (pro) {
@@ -426,19 +673,22 @@
       if (state.preferredTheme && THEMES[state.preferredTheme]) {
         state.theme = state.preferredTheme;
       }
+      if (!state.snsFooter && state.preferredSnsFooter) {
+        state.snsFooter = state.preferredSnsFooter;
+        if ($("inSnsFooter")) $("inSnsFooter").value = state.snsFooter;
+        syncAutoCaption();
+      }
     } else {
       if (THEMES[state.theme].pro) state.theme = "dark";
       $("selQuality").value = "720";
       clearLogo();
     }
 
-    const lim = pro ? CFG.LIMITS.pro : CFG.LIMITS.free;
-    $("limitHint").textContent =
-      `現在のプラン：${lim.width}×${lim.height} ／ 動画は最大${lim.maxSeconds}秒` +
-      (pro ? " ／ 透かしなし" : " ／ 院名下に透かしあり") +
-      "。MP4で保存できない環境ではWebMで保存されます。";
+    refreshQualityLabels();
+    refreshProTrialUI();
     renderThemes();
     syncModalView();
+    markDirty();
   }
 
   function buildMetaFromApi(key, data) {
@@ -824,7 +1074,489 @@
       !scrubbingTrim &&
       (p.scanning || p.warming || syncingVideos || !p.el || p.el.seeking || p.el.readyState < 2));
   }
-  function drawMedia(ctx, p, x, y, w, h, th, placeholder, label) {
+  // ---------- プロ演出・顔ぼかし・姿勢スタンプ・テンプレ制御 ----------
+  function setAspect(nextAspect) {
+    if (!ASPECT_SPECS[nextAspect]) return;
+    state.aspect = nextAspect;
+    const sp = getSpec();
+    document.querySelectorAll("[data-aspect]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.aspect === nextAspect);
+    });
+    if (pv) {
+      pv.dataset.aspect = nextAspect;
+      if (pv.width !== sp.pvW || pv.height !== sp.pvH) {
+        pv.width = sp.pvW;
+        pv.height = sp.pvH;
+      }
+    }
+    Object.keys(TEXT_SLIDERS).forEach((k) => {
+      const b = textBaseFor(k);
+      state.textPos[k].dy = clamp(state.textPos[k].dy, 45 - b.y, sp.LH - 45 - b.y);
+    });
+    ["before", "after"].forEach((w) => {
+      const p = state.panels[w];
+      const pf = getPanelFrame(w);
+      const { rx, ry } = panelRange(p, pf.w, pf.h);
+      if (rx === 0) p.ox = 0;
+      if (ry === 0) p.oy = 0;
+    });
+    syncTextSliders();
+    refreshQualityLabels();
+    refreshProTrialUI();
+    markDirty();
+  }
+
+  function setLayout(nextLayout) {
+    if (!["split-h", "split-v", "wipe"].includes(nextLayout)) return;
+    state.layout = nextLayout;
+    state.wipeManual = false;
+    document.querySelectorAll("[data-layout]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.layout === nextLayout);
+    });
+    ["before", "after"].forEach((w) => {
+      const p = state.panels[w];
+      const pf = getPanelFrame(w);
+      const { rx, ry } = panelRange(p, pf.w, pf.h);
+      if (rx === 0) p.ox = 0;
+      if (ry === 0) p.oy = 0;
+    });
+    refreshProTrialUI();
+    markDirty();
+  }
+
+  function refreshBlurStatusUI() {
+    const chkMain = $("chkFaceBlur");
+    const body = $("faceBlurBody");
+    if (chkMain) chkMain.checked = state.faceBlur;
+    if (body) body.hidden = !state.faceBlur;
+
+    ["before", "after"].forEach((w) => {
+      const W = cap(w);
+      const p = state.panels[w];
+      const b = p.blur;
+      const chkEl = $("chkBlur" + W);
+      const selEl = $("selBlurMode" + W);
+      const szEl = $("blurSize" + W);
+      const stEl = $("blurStatus" + W);
+      if (chkEl) chkEl.checked = b.enabled;
+      if (selEl) selEl.value = b.mode;
+      if (szEl) szEl.value = String(b.scale);
+      if (!stEl) return;
+
+      stEl.className = "blur-status";
+      if (!b.enabled) {
+        stEl.textContent = "この枠のぼかし：オフ";
+      } else if (!p.el) {
+        stEl.textContent = "写真・動画を選ぶと自動検出します";
+      } else if (b.status === "tracking") {
+        stEl.textContent = "🔍 顔・頭の位置を解析中…";
+      } else if (b.mode === "fixed") {
+        stEl.textContent = "📌 位置固定中（プレビューの丸をドラッグで移動）";
+        stEl.classList.add("ok");
+      } else if (b.status === "ai_ok") {
+        stEl.textContent = "✅ AI自動追従中（丸をドラッグで微調整可）";
+        stEl.classList.add("ok");
+      } else if (b.status === "patch_ok") {
+        stEl.textContent = "✅ 指定した頭の位置から自動追従中";
+        stEl.classList.add("ok");
+      } else if (b.status === "fallback") {
+        stEl.textContent = "⚠ 正面顔未検出：丸を頭にドラッグ→「今の丸の位置から追従」または「位置を固定」で調整可";
+        stEl.classList.add("warn");
+      } else {
+        stEl.textContent = "待機中";
+      }
+    });
+  }
+
+  async function runFaceTrack(which, fromCurrentAnchor) {
+    const p = state.panels[which];
+    if (!p || !p.el || !FACE) {
+      refreshBlurStatusUI();
+      return;
+    }
+    const b = p.blur;
+    const token = ++b.trackId;
+    const isCancelled = () => state.panels[which] !== p || b.trackId !== token;
+
+    if (p.type === "image") {
+      if (fromCurrentAnchor) {
+        const cur = FACE.sampleAtTime(b, 0);
+        b.fixedX = cur.mx;
+        b.fixedY = cur.my;
+        b.baseR = cur.mr;
+        b.offsetX = 0;
+        b.offsetY = 0;
+        b.mode = "fixed";
+        b.status = "fixed";
+        blurRingUntil = Date.now() + 2600;
+        refreshBlurStatusUI();
+        markDirty();
+        return;
+      }
+      b.status = "tracking";
+      refreshBlurStatusUI();
+      const res = await FACE.trackImage(p.el, isCancelled);
+      if (isCancelled() || !res) return;
+      b.fixedX = res.mx;
+      b.fixedY = res.my;
+      b.baseR = res.mr;
+      b.offsetX = 0;
+      b.offsetY = 0;
+      b.keyframes = res.keyframes || [];
+      b.status = res.status;
+      blurRingUntil = Date.now() + 2600;
+      refreshBlurStatusUI();
+      markDirty();
+      return;
+    }
+
+    if (p.type === "video") {
+      if (fromCurrentAnchor) {
+        const curT = p.el ? p.el.currentTime : (p.trimStart || 0);
+        const cur = FACE.sampleAtTime(b, curT);
+        b.mode = "patch";
+        b.status = "tracking";
+        refreshBlurStatusUI();
+        const res = await FACE.trackVideoFromAnchor(
+          p.url,
+          p.el.duration || 0,
+          { t: curT, mx: cur.mx, my: cur.my, mr: cur.mr },
+          isCancelled
+        );
+        if (isCancelled()) return;
+        if (res) {
+          b.fixedX = res.mx;
+          b.fixedY = res.my;
+          b.baseR = res.mr;
+          b.offsetX = 0;
+          b.offsetY = 0;
+          b.keyframes = res.keyframes || [];
+          b.status = "patch_ok";
+        } else {
+          b.mode = "fixed";
+          b.fixedX = cur.mx;
+          b.fixedY = cur.my;
+          b.baseR = cur.mr;
+          b.offsetX = 0;
+          b.offsetY = 0;
+          b.status = "fixed";
+        }
+        blurRingUntil = Date.now() + 2600;
+        refreshBlurStatusUI();
+        markDirty();
+        return;
+      }
+
+      b.status = "tracking";
+      refreshBlurStatusUI();
+      const res = await FACE.trackVideoAuto(p.url, p.el.duration || 0, isCancelled);
+      if (isCancelled()) return;
+      if (res) {
+        b.fixedX = res.mx;
+        b.fixedY = res.my;
+        b.baseR = res.mr;
+        b.offsetX = 0;
+        b.offsetY = 0;
+        b.keyframes = res.keyframes || [];
+        b.status = res.status;
+      } else {
+        b.status = "fallback";
+      }
+      blurRingUntil = Date.now() + 2600;
+      refreshBlurStatusUI();
+      markDirty();
+    }
+  }
+
+  function refreshMarkerButtons() {
+    const list = state.posture.markers;
+    const hasArrow = list.some((m) => m.type === "arrow");
+    const rotBtn = $("btnRotateMarker");
+    const clrBtn = $("btnClearMarkers");
+    if (rotBtn) rotBtn.hidden = !hasArrow;
+    if (clrBtn) clrBtn.hidden = list.length === 0;
+  }
+
+  function addMarker(type) {
+    if (state.posture.markers.length >= 12) {
+      setMsg("スタンプは最大12個まで追加できます。", "err");
+      return;
+    }
+    const idx = state.posture.markers.length;
+    const stepOff = (idx % 4) * 0.055;
+    const m = {
+      id: markerSeq++,
+      type: type === "arrow" ? "arrow" : "circle",
+      nx: clamp((type === "arrow" ? 0.66 : 0.75) - stepOff * 0.6, 0.12, 0.88),
+      ny: clamp(0.42 + stepOff, 0.12, 0.88),
+      angle: 0,
+      scale: 1
+    };
+    state.posture.markers.push(m);
+    state.posture.selectedId = m.id;
+    refreshMarkerButtons();
+    refreshProTrialUI();
+    markDirty();
+  }
+
+  function rotateSelectedMarker() {
+    const arrows = state.posture.markers.filter((m) => m.type === "arrow");
+    if (!arrows.length) return;
+    let target = arrows.find((m) => m.id === state.posture.selectedId);
+    if (!target) {
+      target = arrows[arrows.length - 1];
+      state.posture.selectedId = target.id;
+    }
+    target.angle = ((target.angle || 0) + 45) % 360;
+    markDirty();
+  }
+
+  function clearAllMarkers() {
+    state.posture.markers = [];
+    state.posture.selectedId = 0;
+    refreshMarkerButtons();
+    refreshProTrialUI();
+    markDirty();
+  }
+
+  function refreshEndCardPreviewBtn() {
+    const btn = $("btnPreviewEndCard");
+    if (!btn) return;
+    btn.textContent = state.endCard.previewing
+      ? "↩ 比較プレビューに戻る"
+      : "👁 プレビューで誘導カットを確認";
+  }
+
+  function loadPresets() {
+    try {
+      const raw = localStorage.getItem(LS_PRESETS);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function savePresetList(arr) {
+    try { localStorage.setItem(LS_PRESETS, JSON.stringify(arr.slice(0, 15))); } catch (e) {}
+  }
+  function renderPresets() {
+    const box = $("presetList");
+    if (!box) return;
+    const list = loadPresets();
+    box.innerHTML = "";
+    if (!list.length) {
+      const sp = document.createElement("span");
+      sp.className = "preset-empty";
+      sp.textContent = "よく使う症状・配色・演出を保存してワンタップで呼び出せます";
+      box.appendChild(sp);
+      return;
+    }
+    list.forEach((pr) => {
+      const chip = document.createElement("div");
+      chip.className = "preset-chip";
+      const loadBtn = document.createElement("button");
+      loadBtn.type = "button";
+      loadBtn.className = "preset-load";
+      loadBtn.textContent = "📋 " + (pr.name || "テンプレ");
+      loadBtn.onclick = () => applyPreset(pr);
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "preset-del";
+      delBtn.setAttribute("aria-label", "削除");
+      delBtn.textContent = "×";
+      delBtn.onclick = () => deletePreset(pr.id);
+      chip.appendChild(loadBtn);
+      chip.appendChild(delBtn);
+      box.appendChild(chip);
+    });
+  }
+
+  function saveCurrentPreset() {
+    if (!requirePro("症状別テンプレート保存")) return;
+    const nameIn = $("inPresetName");
+    const rawName = (nameIn ? nameIn.value.trim() : "") || state.symptom || "症状テンプレ";
+    const name = rawName.slice(0, 20);
+    const list = loadPresets();
+    const entry = {
+      id: "pr_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      name,
+      symptom: state.symptom,
+      age: state.age,
+      sub: state.sub,
+      aspect: state.aspect,
+      layout: state.layout,
+      theme: state.theme,
+      custom: { ...state.custom },
+      textPos: JSON.parse(JSON.stringify(state.textPos)),
+      faceBlur: state.faceBlur,
+      postureGrid: state.posture.grid,
+      postureLines: state.posture.lines,
+      postureY1: state.posture.y1,
+      postureY2: state.posture.y2,
+      endCardEnabled: state.endCard.enabled,
+      endArea: state.endCard.area,
+      endOffer: state.endCard.offer,
+      endCta: state.endCard.cta,
+      disclaimerEnabled: state.disclaimer.enabled,
+      disclaimerText: state.disclaimer.text
+    };
+    const existingIdx = list.findIndex((x) => x.name === name);
+    if (existingIdx >= 0) list[existingIdx] = entry;
+    else list.unshift(entry);
+    savePresetList(list);
+    if (nameIn) nameIn.value = "";
+    renderPresets();
+    setMsg(`💾 テンプレート「${name}」を保存しました。`, "ok");
+  }
+
+  function applyPreset(pr) {
+    if (!pr) return;
+    if (typeof pr.symptom === "string") { state.symptom = pr.symptom; $("inSymptom").value = pr.symptom; }
+    if (typeof pr.age === "string") { state.age = pr.age; $("inAge").value = pr.age; }
+    if (typeof pr.sub === "string") { state.sub = pr.sub; $("inSub").value = pr.sub; }
+    if (pr.custom) {
+      if (isHex(pr.custom.bg)) { state.custom.bg = pr.custom.bg; $("cBg").value = pr.custom.bg; }
+      if (isHex(pr.custom.text)) { state.custom.text = pr.custom.text; $("cText").value = pr.custom.text; }
+      if (isHex(pr.custom.accent)) { state.custom.accent = pr.custom.accent; $("cAccent").value = pr.custom.accent; }
+    }
+    if (pr.theme && THEMES[pr.theme]) {
+      state.preferredTheme = pr.theme;
+      state.theme = (THEMES[pr.theme].pro && !pro) ? "dark" : pr.theme;
+    }
+    if (pr.aspect && ASPECT_SPECS[pr.aspect]) setAspect(pr.aspect);
+    if (pr.layout) setLayout(pr.layout);
+    if (pr.textPos) {
+      const g = getGeom();
+      Object.keys(TEXT_SLIDERS).forEach((k) => {
+        const tp = pr.textPos[k], b = textBaseFor(k);
+        if (tp && typeof tp.dx === "number") state.textPos[k].dx = clamp(Math.round(tp.dx), 80 - b.x, LW - 80 - b.x);
+        if (tp && typeof tp.dy === "number") state.textPos[k].dy = clamp(Math.round(tp.dy), 45 - b.y, g.LH - 45 - b.y);
+      });
+      syncTextSliders();
+    }
+    if (typeof pr.faceBlur === "boolean") {
+      state.faceBlur = pr.faceBlur;
+      refreshBlurStatusUI();
+      if (state.faceBlur) {
+        ["before", "after"].forEach((w) => {
+          const p = state.panels[w];
+          if (p.el && p.blur.status === "idle") p.blur.trackPromise = runFaceTrack(w, false);
+        });
+      }
+    }
+    if (typeof pr.postureGrid === "boolean") {
+      state.posture.grid = pr.postureGrid;
+      $("chkPostureGrid").checked = pr.postureGrid;
+    }
+    if (typeof pr.postureLines === "boolean") {
+      state.posture.lines = pr.postureLines;
+      $("chkPostureLines").checked = pr.postureLines;
+    }
+    if (typeof pr.postureY1 === "number") state.posture.y1 = clamp(pr.postureY1, 0.04, 0.96);
+    if (typeof pr.postureY2 === "number") state.posture.y2 = clamp(pr.postureY2, 0.04, 0.96);
+    if (typeof pr.endCardEnabled === "boolean") {
+      state.endCard.enabled = pr.endCardEnabled;
+      state.endCard.previewing = false;
+      $("chkEndCard").checked = pr.endCardEnabled;
+      $("endCardBody").hidden = !pr.endCardEnabled;
+      refreshEndCardPreviewBtn();
+    }
+    if (typeof pr.endArea === "string") { state.endCard.area = pr.endArea; $("inEndArea").value = pr.endArea; }
+    if (typeof pr.endOffer === "string") { state.endCard.offer = pr.endOffer; $("inEndOffer").value = pr.endOffer; }
+    if (typeof pr.endCta === "string" && pr.endCta) { state.endCard.cta = pr.endCta; $("inEndCta").value = pr.endCta; }
+    if (typeof pr.disclaimerEnabled === "boolean") {
+      state.disclaimer.enabled = pr.disclaimerEnabled;
+      $("chkDisclaimer").checked = pr.disclaimerEnabled;
+      $("disclaimerBody").hidden = !pr.disclaimerEnabled;
+    }
+    if (typeof pr.disclaimerText === "string" && pr.disclaimerText) {
+      state.disclaimer.text = pr.disclaimerText;
+      $("inDisclaimer").value = pr.disclaimerText;
+    }
+    captionEdited = false;
+    syncAutoCaption();
+    renderThemes();
+    refreshBgmUI();
+    refreshProTrialUI();
+    saveSettings();
+    markDirty();
+    setMsg(`📋 テンプレート「${pr.name}」を反映しました。`, "ok");
+  }
+
+  function deletePreset(id) {
+    const list = loadPresets().filter((x) => x.id !== id);
+    savePresetList(list);
+    renderPresets();
+  }
+
+  function resetProOnlyFeatures() {
+    setAspect("9:16");
+    setLayout("split-h");
+    state.faceBlur = false;
+    refreshBlurStatusUI();
+
+    state.posture.grid = false;
+    state.posture.lines = false;
+    state.posture.markers = [];
+    state.posture.selectedId = 0;
+    if ($("chkPostureGrid")) $("chkPostureGrid").checked = false;
+    if ($("chkPostureLines")) $("chkPostureLines").checked = false;
+    refreshMarkerButtons();
+
+    state.endCard.enabled = false;
+    state.endCard.previewing = false;
+    if ($("chkEndCard")) $("chkEndCard").checked = false;
+    if ($("endCardBody")) $("endCardBody").hidden = true;
+    refreshEndCardPreviewBtn();
+
+    state.disclaimer.enabled = false;
+    if ($("chkDisclaimer")) $("chkDisclaimer").checked = false;
+    if ($("disclaimerBody")) $("disclaimerBody").hidden = true;
+
+    state.snsFooter = "";
+    if ($("inSnsFooter")) $("inSnsFooter").value = "";
+    captionEdited = false;
+    syncAutoCaption();
+
+    if ($("modal")) $("modal").hidden = true;
+    refreshBgmUI();
+    refreshProTrialUI();
+    markDirty();
+    setMsg("有料機能をオフに戻しました。このまま無料プランで保存・SNS投稿できます。", "ok");
+  }
+
+  function computeBlurGeom(which, visRect) {
+    const p = state.panels[which];
+    if (!p || !p.el || !p.blur || !p.blur.enabled || !FACE) return null;
+    const s = mediaSize(p);
+    if (!s) return null;
+    const frame = getPanelFrame(which);
+    const sc = Math.max(frame.w / s.w, frame.h / s.h) * p.zoom;
+    const dw = s.w * sc, dh = s.h * sc;
+    const rangeX = Math.max(0, (dw - frame.w) / 2);
+    const rangeY = Math.max(0, (dh - frame.h) / 2);
+    const dx = frame.x + (frame.w - dw) / 2 + p.ox * rangeX;
+    const dy = frame.y + (frame.h - dh) / 2 + p.oy * rangeY;
+    const mediaT = (p.type === "video" && p.el) ? p.el.currentTime : 0;
+    const smp = FACE.sampleAtTime(p.blur, mediaT);
+    const cx = dx + smp.mx * dw;
+    const cy = dy + smp.my * dh;
+    const baseR = smp.mr * Math.min(dw, dh) * (p.blur.scale || 1);
+    return {
+      cx,
+      cy,
+      rx: Math.max(16, baseR * 0.92),
+      ry: Math.max(19, baseR * 1.16),
+      dw,
+      dh,
+      smp,
+      clipRect: visRect || frame
+    };
+  }
+
+  function drawMedia(ctx, p, x, y, w, h, th, placeholder, label, visRect) {
+    const vis = visRect || { x, y, w, h };
+    if (vis.w <= 0.5 || vis.h <= 0.5) return;
     const s = mediaSize(p);
     if (s) {
       const useHold = shouldUseHold(p);
@@ -832,62 +1564,203 @@
       const srcW = useHold ? p.holdCanvas.width : s.w;
       const srcH = useHold ? p.holdCanvas.height : s.h;
       if (src && srcW > 0 && srcH > 0) {
-        // ctx.clip() を使わず9引数のソース矩形切り出しで描画し、4K動画のステンシルクリップ＆領域外サンプリング負荷をゼロ化
+        // ctx.clip() を使わず9引数のソース矩形切り出しで描画し、4K動画やスライド比較のクリップ負荷をゼロ化
         const sc = Math.max(w / srcW, h / srcH) * p.zoom;
         const dw = srcW * sc, dh = srcH * sc;
         const rx = Math.max(0, (dw - w) / 2), ry = Math.max(0, (dh - h) / 2);
         const dx = x + (w - dw) / 2 + p.ox * rx;
         const dy = y + (h - dh) / 2 + p.oy * ry;
-        const sw = Math.min(srcW, w / sc);
-        const sh = Math.min(srcH, h / sc);
-        const sx = clamp((x - dx) / sc, 0, Math.max(0, srcW - sw));
-        const sy = clamp((y - dy) / sc, 0, Math.max(0, srcH - sh));
-        ctx.drawImage(src, sx, sy, sw, sh, x, y, w, h);
+        const sx = clamp((vis.x - dx) / sc, 0, srcW);
+        const sy = clamp((vis.y - dy) / sc, 0, srcH);
+        const sw = clamp(vis.w / sc, 0, Math.max(0, srcW - sx));
+        const sh = clamp(vis.h / sc, 0, Math.max(0, srcH - sy));
+        if (sw > 0 && sh > 0) {
+          ctx.drawImage(src, sx, sy, sw, sh, vis.x, vis.y, vis.w, vis.h);
+        }
       }
-      if (placeholder && (p.scanning || p.warming)) {
+      if (placeholder && (p.scanning || p.warming) && vis.w > 180) {
+        const bw = Math.min(vis.w - 40, 440);
+        const bx = vis.x + (vis.w - bw) / 2;
         ctx.fillStyle = "rgba(0,0,0,0.58)";
-        rr(ctx, x + 36, y + h / 2 - 44, w - 72, 88, 22);
+        rr(ctx, bx, vis.y + vis.h / 2 - 44, bw, 88, 22);
         ctx.fill();
         ctx.fillStyle = "#fff";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.font = `700 30px ${FONT}`;
-        ctx.fillText(p.scanning ? "🚶 動き始めを解析中…" : "▶ 再生を準備中…", x + w / 2, y + h / 2 + 2);
+        ctx.font = `700 28px ${FONT}`;
+        ctx.fillText(p.scanning ? "🚶 動き始めを解析中…" : "▶ 再生を準備中…", vis.x + vis.w / 2, vis.y + vis.h / 2 + 2);
       }
     } else {
       ctx.fillStyle = "rgba(128,128,128,0.18)";
-      ctx.fillRect(x, y, w, h);
-      if (placeholder) {
+      ctx.fillRect(vis.x, vis.y, vis.w, vis.h);
+      if (placeholder && vis.w > 150) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(vis.x, vis.y, vis.w, vis.h);
+        ctx.clip();
         ctx.fillStyle = "rgba(160,160,160,0.9)";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.font = `700 48px ${FONT}`;
-        ctx.fillText(label, x + w / 2, y + h / 2 - 30);
-        ctx.font = `500 34px ${FONT}`;
-        ctx.fillText("画像・動画を追加", x + w / 2, y + h / 2 + 34);
+        ctx.font = `700 46px ${FONT}`;
+        ctx.fillText(label, vis.x + vis.w / 2, vis.y + vis.h / 2 - 28);
+        ctx.font = `500 32px ${FONT}`;
+        ctx.fillText("画像・動画を追加", vis.x + vis.w / 2, vis.y + vis.h / 2 + 32);
+        ctx.restore();
       }
     }
   }
-  function badge(ctx, text, x, y, color, textColor) {
-    ctx.font = `900 54px ${FONT}`;
-    const w = ctx.measureText(text).width + 56, h = 84;
+
+  function badge(ctx, text, x, y, color, textColor, g, alignRight) {
+    const fSz = (g && g.fonts && g.fonts.badge) ? g.fonts.badge[0] : 54;
+    const h = (g && g.fonts && g.fonts.badge) ? g.fonts.badge[1] : 84;
+    ctx.font = `900 ${fSz}px ${FONT}`;
+    const w = ctx.measureText(text).width + Math.round(fSz * 1.04);
+    const drawX = alignRight ? x - w : x;
     ctx.fillStyle = color;
-    rr(ctx, x, y, w, h, 18); ctx.fill();
+    rr(ctx, drawX, y, w, h, 16);
+    ctx.fill();
     ctx.fillStyle = textColor;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(text, x + w / 2, y + h / 2 + 3);
+    ctx.fillText(text, drawX + w / 2, y + h / 2 + 2);
   }
 
-  // ---------- 静的オーバーレイキャッシュ＆メイン描画（preview / export 共通） ----------
+  function drawPostureLayer(c, g, opt) {
+    if (!state.posture.grid && !state.posture.lines && state.posture.markers.length === 0) return;
+    c.save();
+    c.beginPath();
+    c.rect(0, g.panelY, LW, g.panelH);
+    c.clip();
+
+    // 1. 方眼グリッド＋中心垂線
+    if (state.posture.grid) {
+      const step = 90;
+      c.lineWidth = 2;
+      c.strokeStyle = "rgba(0,0,0,0.28)";
+      c.beginPath();
+      for (let x = step; x < LW; x += step) { c.moveTo(x + 1, g.panelY); c.lineTo(x + 1, g.bottomY); }
+      for (let y = g.panelY + step; y < g.bottomY; y += step) { c.moveTo(0, y + 1); c.lineTo(LW, y + 1); }
+      c.stroke();
+
+      c.strokeStyle = "rgba(255,255,255,0.34)";
+      c.beginPath();
+      for (let x = step; x < LW; x += step) { c.moveTo(x, g.panelY); c.lineTo(x, g.bottomY); }
+      for (let y = g.panelY + step; y < g.bottomY; y += step) { c.moveTo(0, y); c.lineTo(LW, y); }
+      c.stroke();
+
+      // 各パネルの体幹中心線（重心ライン）
+      c.save();
+      c.strokeStyle = "rgba(56,232,255,0.78)";
+      c.lineWidth = 3.5;
+      c.setLineDash([16, 12]);
+      c.beginPath();
+      if (state.layout === "split-h") {
+        const pw = (LW - GAP) / 2;
+        c.moveTo(pw / 2, g.panelY); c.lineTo(pw / 2, g.bottomY);
+        c.moveTo(pw + GAP + pw / 2, g.panelY); c.lineTo(pw + GAP + pw / 2, g.bottomY);
+      } else {
+        c.moveTo(LW / 2, g.panelY); c.lineTo(LW / 2, g.bottomY);
+      }
+      c.stroke();
+      c.restore();
+    }
+
+    // 2. 肩・骨盤の高さ比較ライン（上下ドラッグ対応）
+    if (state.posture.lines) {
+      const defs = [
+        { ny: state.posture.y1, color: "#38e8ff", tag: "肩・耳ライン" },
+        { ny: state.posture.y2, color: "#ffd24a", tag: "骨盤・腰ライン" }
+      ];
+      defs.forEach((ln) => {
+        const ly = Math.round(g.panelY + clamp(ln.ny, 0.04, 0.96) * g.panelH);
+        c.save();
+        c.strokeStyle = "rgba(0,0,0,0.58)";
+        c.lineWidth = 9;
+        c.beginPath(); c.moveTo(0, ly); c.lineTo(LW, ly); c.stroke();
+
+        c.strokeStyle = ln.color;
+        c.lineWidth = 5;
+        c.beginPath(); c.moveTo(0, ly); c.lineTo(LW, ly); c.stroke();
+
+        if (opt.preview) {
+          c.font = `700 22px ${FONT}`;
+          const tw = c.measureText(ln.tag).width + 24;
+          c.fillStyle = "rgba(15,17,21,0.84)";
+          rr(c, 16, ly - 38, tw, 32, 10);
+          c.fill();
+          c.fillStyle = ln.color;
+          c.textAlign = "left";
+          c.textBaseline = "middle";
+          c.fillText(ln.tag, 28, ly - 21);
+        }
+        c.restore();
+      });
+    }
+
+    // 3. 注目スタンプ（赤丸・8方向回転矢印）
+    state.posture.markers.forEach((m) => {
+      const mx = clamp(m.nx, 0.04, 0.96) * LW;
+      const my = g.panelY + clamp(m.ny, 0.04, 0.96) * g.panelH;
+      const sc = clamp(m.scale || 1, 0.55, 2.0);
+      c.save();
+      c.translate(mx, my);
+      if (m.type === "arrow") {
+        c.rotate(((m.angle || 0) * Math.PI) / 180);
+        c.scale(sc, sc);
+        c.beginPath();
+        c.moveTo(58, 0);
+        c.lineTo(6, -42);
+        c.lineTo(6, -18);
+        c.lineTo(-58, -18);
+        c.lineTo(-58, 18);
+        c.lineTo(6, 18);
+        c.lineTo(6, 42);
+        c.closePath();
+        c.lineJoin = "round";
+        c.strokeStyle = "rgba(255,255,255,0.95)";
+        c.lineWidth = 12;
+        c.stroke();
+        c.fillStyle = "#ff2638";
+        c.fill();
+      } else {
+        const r = 74 * sc;
+        c.beginPath();
+        c.arc(0, 0, r, 0, Math.PI * 2);
+        c.strokeStyle = "rgba(255,255,255,0.92)";
+        c.lineWidth = 15;
+        c.stroke();
+        c.strokeStyle = "#ff2638";
+        c.lineWidth = 9;
+        c.stroke();
+      }
+      c.restore();
+    });
+
+    c.restore();
+  }
+
+  // ---------- 静的オーバーレイキャッシュ＆エンドカードキャッシュ ----------
   const textBoxes = { symptom: null, age: null, clinic: null, sub: null };
   const overlaySlots = {
     preview: { key: "", canvas: null, ctx: null },
     export:  { key: "", canvas: null, ctx: null }
   };
+  const endCardSlot = { key: "", canvas: null, ctx: null };
+
+  function serializePostureKey() {
+    return [
+      state.posture.grid ? 1 : 0,
+      state.posture.lines ? `${state.posture.y1.toFixed(4)},${state.posture.y2.toFixed(4)}` : "0",
+      state.posture.markers.map((m) => `${m.id}:${m.type}:${m.nx.toFixed(4)}:${m.ny.toFixed(4)}:${m.angle}:${m.scale}`).join(";")
+    ].join("|");
+  }
 
   function getOverlayCanvas(W, H, opt) {
+    const g = getGeom();
     const slot = opt.preview ? overlaySlots.preview : overlaySlots.export;
     const hasValidLogo = !!(state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0);
+    const discText = state.disclaimer.enabled ? (state.disclaimer.text || "").trim() : "";
     const key = [
       W, H,
+      state.aspect,
+      state.layout,
       opt.preview ? 1 : 0,
       opt.guide ? 1 : 0,
       opt.noWatermark ? 1 : 0,
@@ -900,6 +1773,8 @@
       state.age,
       state.clinic,
       state.sub,
+      discText,
+      serializePostureKey(),
       state.textPos.symptom.dx, state.textPos.symptom.dy,
       state.textPos.age.dx, state.textPos.age.dy,
       state.textPos.clinic.dx, state.textPos.clinic.dy,
@@ -924,16 +1799,29 @@
     c.save();
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, W, H);
-    c.setTransform(W / LW, 0, 0, H / LH, 0, 0);
+    c.setTransform(W / LW, 0, 0, H / g.LH, 0, 0);
 
-    // 上部帯・下部帯・中央仕切り線のみ不透明背景を描画（左右の映像窓は透過のまま抜く）
+    // 姿勢チェック基準線・注目スタンプ（映像窓の上に重なり、上下文字帯の下に収まる）
+    drawPostureLayer(c, g, opt);
+
+    // 上部帯・下部帯・分割仕切り線を描画
     c.fillStyle = th.bg;
-    c.fillRect(0, 0, LW, PANEL_Y);
-    c.fillRect(0, BOTTOM_Y, LW, LH - BOTTOM_Y);
-    c.fillRect(PANEL_W, PANEL_Y, GAP, PANEL_H);
-
-    badge(c, "BEFORE", 24, PANEL_Y + 24, "rgba(70,76,88,0.92)", "#fff");
-    badge(c, "AFTER", PANEL_W + GAP + 24, PANEL_Y + 24, th.accent, "#fff");
+    c.fillRect(0, 0, LW, g.panelY);
+    c.fillRect(0, g.bottomY, LW, g.LH - g.bottomY);
+    if (state.layout === "split-h") {
+      const pw = (LW - GAP) / 2;
+      c.fillRect(pw, g.panelY, GAP, g.panelH);
+      badge(c, "BEFORE", 24, g.panelY + 20, "rgba(70,76,88,0.92)", "#fff", g, false);
+      badge(c, "AFTER", pw + GAP + 24, g.panelY + 20, th.accent, "#fff", g, false);
+    } else if (state.layout === "split-v") {
+      const h1 = Math.floor((g.panelH - GAP) / 2);
+      c.fillRect(0, g.panelY + h1, LW, GAP);
+      badge(c, "BEFORE", 24, g.panelY + 18, "rgba(70,76,88,0.92)", "#fff", g, false);
+      badge(c, "AFTER", 24, g.panelY + h1 + GAP + 18, th.accent, "#fff", g, false);
+    } else {
+      badge(c, "BEFORE", 24, g.panelY + 20, "rgba(70,76,88,0.92)", "#fff", g, false);
+      badge(c, "AFTER", LW - 24, g.panelY + 20, th.accent, "#fff", g, true);
+    }
 
     // 上部テキスト：症状・年齢
     c.textAlign = "center"; c.textBaseline = "middle";
@@ -941,7 +1829,7 @@
     if (symptom) {
       const { x: sx, y: sy } = textXY("symptom");
       c.fillStyle = state.symptom ? th.text : "rgba(160,160,160,0.7)";
-      const sz = fit(c, symptom, 960, 132, 52, 900);
+      const sz = fit(c, symptom, 960, g.fonts.symptom[0], g.fonts.symptom[1], 900);
       c.fillText(symptom, sx, sy);
       if (opt.preview) {
         const tw = Math.max(240, c.measureText(symptom).width);
@@ -954,12 +1842,12 @@
     const age = state.age || (opt.preview ? "年齢・属性" : "");
     if (age) {
       const { x: ax, y: ay } = textXY("age");
-      const sz = fit(c, age, 800, 64, 34, 700);
-      const tw = c.measureText(age).width + 80, ph = sz + 40;
+      const sz = fit(c, age, 800, g.fonts.age[0], g.fonts.age[1], 700);
+      const tw = c.measureText(age).width + 76, ph = sz + g.fonts.age[2];
       c.fillStyle = state.age ? th.accent : "rgba(160,160,160,0.35)";
-      rr(c, ax - tw / 2, ay - ph / 2 + 4, tw, ph, ph / 2); c.fill();
+      rr(c, ax - tw / 2, ay - ph / 2 + 2, tw, ph, ph / 2); c.fill();
       c.fillStyle = "#fff"; c.textAlign = "center"; c.textBaseline = "middle";
-      c.fillText(age, ax, ay + 4);
+      c.fillText(age, ax, ay + 2);
       if (opt.preview) {
         textBoxes.age = { x: ax - tw / 2 - 16, y: ay - ph / 2 - 12, w: tw + 32, h: ph + 24 };
       }
@@ -970,18 +1858,19 @@
     // 下部テキスト：院名（ロゴは左）・補足
     const clinic = state.clinic || (opt.preview ? "院名を入力" : "");
     const { x: cx, y: cy } = textXY("clinic");
-    let clinicHalfH = -30;
+    const maxLogoH = g.fonts.clinic[2];
+    let clinicHalfH = -24;
     if (clinic) {
       c.textAlign = "center"; c.textBaseline = "middle";
-      let maxW = 960, logoW = 0, logoH = 0;
+      let maxW = 960, logoW = 0;
       if (hasValidLogo) {
-        logoH = 120; logoW = state.logo.naturalWidth / state.logo.naturalHeight * logoH;
-        logoW = Math.min(logoW, 260); maxW = 960 - logoW - 30;
+        logoW = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * maxLogoH, 240);
+        maxW = 960 - logoW - 26;
       }
-      const sz = fit(c, clinic, maxW, 88, 38, 900);
-      clinicHalfH = Math.max(sz / 2, logoW ? 60 : 40);
+      const sz = fit(c, clinic, maxW, g.fonts.clinic[0], g.fonts.clinic[1], 900);
+      clinicHalfH = Math.max(sz / 2, logoW ? maxLogoH / 2 : 34);
       const tw = c.measureText(clinic).width;
-      const total = tw + (logoW ? logoW + 30 : 0);
+      const total = tw + (logoW ? logoW + 26 : 0);
       const left = cx - total / 2;
       if (logoW) {
         const lh = logoW / (state.logo.naturalWidth / state.logo.naturalHeight);
@@ -989,15 +1878,15 @@
       }
       c.textAlign = "left";
       c.fillStyle = state.clinic ? th.text : "rgba(160,160,160,0.7)";
-      c.fillText(clinic, left + (logoW ? logoW + 30 : 0), cy + 2);
+      c.fillText(clinic, left + (logoW ? logoW + 26 : 0), cy + 2);
       if (opt.preview) {
-        const bh = Math.max(sz + 36, logoW ? 130 : 96);
+        const bh = Math.max(sz + 32, logoW ? maxLogoH + 12 : 84);
         const bw = Math.max(240, total + 48);
         textBoxes.clinic = { x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh };
       }
     } else if (hasValidLogo) {
-      const lh = 120, lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 400);
-      clinicHalfH = 60;
+      const lh = maxLogoH, lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 380);
+      clinicHalfH = lh / 2;
       c.drawImage(state.logo, cx - lw / 2, cy - lh / 2, lw, lh);
       if (opt.preview) {
         textBoxes.clinic = { x: cx - lw / 2 - 20, y: cy - lh / 2 - 16, w: lw + 40, h: lh + 32 };
@@ -1010,8 +1899,8 @@
     if (state.sub) {
       const { x: sx, y: sy } = textXY("sub");
       c.textAlign = "center"; c.textBaseline = "middle";
-      c.fillStyle = th.text; c.globalAlpha = 0.8;
-      const sz = fit(c, state.sub, 940, 48, 28, 500);
+      c.fillStyle = th.text; c.globalAlpha = 0.82;
+      const sz = fit(c, state.sub, 940, g.fonts.sub[0], g.fonts.sub[1], 500);
       c.fillText(state.sub, sx, sy);
       c.globalAlpha = 1;
       subBoxY = sy;
@@ -1024,20 +1913,33 @@
       textBoxes.sub = null;
     }
 
+    // 免責ミニテロップ（「※施術効果には個人差があります」等）
+    if (discText) {
+      c.save();
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillStyle = th.text;
+      c.globalAlpha = 0.72;
+      fit(c, discText, 980, g.fonts.disclaimer[0], g.fonts.disclaimer[1], 500);
+      c.fillText(discText, LW / 2, g.disclaimerY);
+      c.restore();
+    }
+
     // 透かし（無料プラン：院名の下に表示）
     if (!pro && !opt.noWatermark) {
       c.save();
-      c.font = `700 34px ${FONT}`;
+      c.font = `700 30px ${FONT}`;
       const wmText = CFG.WATERMARK_TEXT || "BAメーカー 無料版";
       const tw = c.measureText(wmText).width;
-      const pw = tw + 56, ph = 58;
+      const pw = tw + 50, ph = 50;
       const wmX = clamp(cx, pw / 2 + 24, LW - pw / 2 - 24);
-      let wmY = cy + clinicHalfH + 48;
-      if (subBoxY !== null && Math.abs(subBoxY - wmY) < 60) {
-        wmY = subBoxY + subHalfH + 46;
+      const bottomLimit = discText ? g.disclaimerY - 38 : g.LH - 22;
+      let wmY = cy + clinicHalfH + 40;
+      if (subBoxY !== null && Math.abs(subBoxY - wmY) < 52) {
+        wmY = subBoxY + subHalfH + 38;
       }
-      if (wmY + ph / 2 > LH - 28) {
-        wmY = Math.max(ph / 2 + 28, cy - Math.max(44, clinicHalfH) - 48);
+      if (wmY + ph / 2 > bottomLimit) {
+        wmY = Math.max(ph / 2 + 24, cy - Math.max(38, clinicHalfH) - 38);
       }
       c.fillStyle = th.bg;
       c.globalAlpha = 0.75;
@@ -1058,11 +1960,13 @@
     // 安全域ガイド（プレビューのみ）
     if (opt.guide) {
       c.fillStyle = "rgba(255,0,0,0.18)";
-      c.fillRect(0, 0, LW, 120);
-      c.fillRect(0, 1640, LW, LH - 1640);
-      c.fillRect(960, 1000, 120, 640);
-      c.fillStyle = "#fff"; c.font = `500 28px ${FONT}`; c.textAlign = "center";
-      c.fillText("Instagram UIで隠れやすい範囲（目安）", LW / 2, 1880);
+      const topSafe = Math.round(g.LH * 0.065);
+      const botSafe = Math.round(g.LH * 0.855);
+      c.fillRect(0, 0, LW, topSafe);
+      c.fillRect(0, botSafe, LW, g.LH - botSafe);
+      c.fillRect(960, Math.round(g.LH * 0.52), 120, botSafe - Math.round(g.LH * 0.52));
+      c.fillStyle = "#fff"; c.font = `500 26px ${FONT}`; c.textAlign = "center";
+      c.fillText("SNSのUIで隠れやすい範囲（目安）", LW / 2, g.LH - 26);
     }
 
     c.restore();
@@ -1070,34 +1974,272 @@
     return slot.canvas;
   }
 
+  /**
+   * 動画ラスト2秒の「予約・LINE誘導エンドカード」（リール視聴スマホ特化・QRコードなし）
+   */
+  function getEndCardCanvas(W, H, opt) {
+    const g = getGeom();
+    const th = theme();
+    const hasValidLogo = !!(state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0);
+    const areaText = (state.endCard.area || "").trim();
+    const offerText = (state.endCard.offer || "").trim() ||
+      (state.symptom ? `「${state.symptom}」のお悩みはお気軽にご相談ください` : "つらい痛み・姿勢のお悩みはお任せください");
+    const ctaText = (state.endCard.cta || "").trim() || "ご予約はプロフィールの公式LINEから ▶";
+    const clinicText = (state.clinic || "").trim() || "ご予約・ご相談受付中";
+    const discText = state.disclaimer.enabled ? (state.disclaimer.text || "").trim() : "";
+
+    const key = [
+      W, H, state.aspect, pro ? 1 : 0, opt && opt.noWatermark ? 1 : 0, fontEpoch,
+      state.theme,
+      state.theme === "custom" ? `${state.custom.bg},${state.custom.text},${state.custom.accent}` : "",
+      hasValidLogo ? (logoUrl || "1") : "0",
+      clinicText, areaText, offerText, ctaText, discText
+    ].join("\x1f");
+
+    if (endCardSlot.canvas && endCardSlot.key === key) {
+      return endCardSlot.canvas;
+    }
+    if (!endCardSlot.canvas) {
+      endCardSlot.canvas = document.createElement("canvas");
+      endCardSlot.ctx = endCardSlot.canvas.getContext("2d");
+    }
+    if (endCardSlot.canvas.width !== W || endCardSlot.canvas.height !== H) {
+      endCardSlot.canvas.width = W;
+      endCardSlot.canvas.height = H;
+    }
+
+    const c = endCardSlot.ctx;
+    const LH = g.LH;
+    const isShort = LH <= 1150;
+    const isMid = LH <= 1400 && !isShort;
+    const kS = isShort ? 0.72 : (isMid ? 0.84 : 1);
+
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, W, H);
+    c.setTransform(W / LW, 0, 0, H / LH, 0, 0);
+
+    // ベース背景＋アクセント光彩
+    c.fillStyle = th.bg;
+    c.fillRect(0, 0, LW, LH);
+    const grad = c.createRadialGradient(LW / 2, LH * 0.42, 40, LW / 2, LH * 0.48, LW * 0.85);
+    grad.addColorStop(0, "rgba(255,255,255,0.08)");
+    grad.addColorStop(1, "rgba(0,0,0,0.22)");
+    c.fillStyle = grad;
+    c.fillRect(0, 0, LW, LH);
+
+    // 中央カード枠
+    const cardX = 56;
+    const cardW = LW - 112;
+    const cardY = Math.round(LH * (isShort ? 0.08 : 0.14));
+    const cardH = Math.round(LH * (isShort ? 0.82 : 0.72));
+    c.fillStyle = "rgba(18,21,28,0.86)";
+    rr(c, cardX, cardY, cardW, cardH, 42);
+    c.fill();
+    c.strokeStyle = th.accent;
+    c.lineWidth = 4;
+    c.stroke();
+
+    let curY = cardY + Math.round(92 * kS);
+
+    // 地域・最寄り駅ピル
+    if (areaText) {
+      const sz = fit(c, "📍 " + areaText, cardW - 120, Math.round(44 * kS), 24, 700);
+      const pw = c.measureText("📍 " + areaText).width + 68;
+      const ph = sz + Math.round(32 * kS);
+      c.fillStyle = "rgba(255,255,255,0.12)";
+      rr(c, LW / 2 - pw / 2, curY - ph / 2, pw, ph, ph / 2);
+      c.fill();
+      c.fillStyle = "#ffffff";
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText("📍 " + areaText, LW / 2, curY + 2);
+      curY += Math.round(118 * kS);
+    } else {
+      curY += Math.round(34 * kS);
+    }
+
+    // 院ロゴ（有効時）
+    if (hasValidLogo) {
+      const lh = Math.round(130 * kS);
+      const lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 320);
+      const realH = lw / (state.logo.naturalWidth / state.logo.naturalHeight);
+      c.drawImage(state.logo, LW / 2 - lw / 2, curY - realH / 2, lw, realH);
+      curY += Math.round(126 * kS);
+    }
+
+    // 院名
+    c.fillStyle = "#ffffff";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    fit(c, clinicText, cardW - 96, Math.round(88 * kS), 38, 900);
+    c.fillText(clinicText, LW / 2, curY);
+    curY += Math.round(78 * kS);
+
+    // アクセント区切りバー
+    c.fillStyle = th.accent;
+    rr(c, LW / 2 - 90, curY, 180, 8, 4);
+    c.fill();
+    curY += Math.round(108 * kS);
+
+    // 初回オファー・見出しボックス
+    const boxW = cardW - 88;
+    const boxH = Math.round(176 * kS);
+    c.fillStyle = "rgba(255,255,255,0.08)";
+    rr(c, LW / 2 - boxW / 2, curY - boxH / 2, boxW, boxH, 26);
+    c.fill();
+    c.strokeStyle = "rgba(255,255,255,0.22)";
+    c.lineWidth = 2;
+    c.stroke();
+
+    c.fillStyle = "#ffd966";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    fit(c, offerText, boxW - 56, Math.round(54 * kS), 26, 900);
+    c.fillText(offerText, LW / 2, curY + 2);
+
+    // 下部 LINE / 予約誘導ボタン（スマホ視聴者がそのままプロフィールへ行けるデザイン）
+    const btnW = cardW - 84;
+    const btnH = Math.round(132 * kS);
+    const btnY = cardY + cardH - Math.round(190 * kS);
+    c.fillStyle = "#06c755";
+    rr(c, LW / 2 - btnW / 2, btnY - btnH / 2, btnW, btnH, btnH / 2);
+    c.fill();
+
+    c.fillStyle = "#ffffff";
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    fit(c, ctaText, btnW - 72, Math.round(48 * kS), 26, 900);
+    c.fillText(ctaText, LW / 2, btnY + 2);
+
+    c.fillStyle = "rgba(255,255,255,0.78)";
+    c.font = `700 ${Math.round(28 * kS)}px ${FONT}`;
+    c.fillText("▲ アイコンをタップしてプロフィールのリンクへ", LW / 2, btnY + btnH / 2 + Math.round(46 * kS));
+
+    if (discText) {
+      c.fillStyle = "rgba(255,255,255,0.68)";
+      fit(c, discText, 960, g.fonts.disclaimer[0], g.fonts.disclaimer[1], 500);
+      c.fillText(discText, LW / 2, g.disclaimerY);
+    }
+
+    if (!pro && !(opt && opt.noWatermark)) {
+      c.fillStyle = "rgba(255,255,255,0.75)";
+      c.font = `700 28px ${FONT}`;
+      c.fillText((CFG.WATERMARK_TEXT || "BAメーカー 無料版") + "（お試しプレビュー）", LW / 2, cardY - 26);
+    }
+
+    c.restore();
+    endCardSlot.key = key;
+    return endCardSlot.canvas;
+  }
+
+  function drawWipeBar(c, g, splitX, th) {
+    c.save();
+    c.strokeStyle = "rgba(0,0,0,0.5)";
+    c.lineWidth = 10;
+    c.beginPath(); c.moveTo(splitX, g.panelY); c.lineTo(splitX, g.bottomY); c.stroke();
+
+    c.strokeStyle = "#ffffff";
+    c.lineWidth = 5;
+    c.beginPath(); c.moveTo(splitX, g.panelY); c.lineTo(splitX, g.bottomY); c.stroke();
+
+    const hy = g.panelY + g.panelH * 0.5;
+    c.beginPath();
+    c.arc(splitX, hy, 42, 0, Math.PI * 2);
+    c.fillStyle = th.accent;
+    c.fill();
+    c.lineWidth = 5;
+    c.strokeStyle = "#ffffff";
+    c.stroke();
+
+    c.fillStyle = "#ffffff";
+    c.font = `900 28px ${FONT}`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText("◀▶", splitX, hy + 2);
+    c.restore();
+  }
+
   function render(c, W, H, opt) {
     opt = opt || {};
+    const g = getGeom();
     const th = theme();
+
+    // エンドカード単体プレビュー中または完全フェード後
+    const previewEndOnly = !!(opt.preview && state.endCard.enabled && state.endCard.previewing);
+    const endAlpha = previewEndOnly ? 1 : clamp(Number(opt.endCardAlpha) || 0, 0, 1);
+
+    if (endAlpha >= 0.999) {
+      const ec = getEndCardCanvas(W, H, opt);
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.drawImage(ec, 0, 0);
+      c.restore();
+      return;
+    }
+
     const ov = getOverlayCanvas(W, H, opt);
 
     c.save();
-    c.setTransform(W / LW, 0, 0, H / LH, 0, 0);
+    c.setTransform(W / LW, 0, 0, H / g.LH, 0, 0);
 
-    // ベース背景（透過PNG素材や境界サブピクセル用）
+    // ベース背景
     c.fillStyle = th.bg;
-    c.fillRect(0, 0, LW, LH);
+    c.fillRect(0, 0, LW, g.LH);
 
-    // 中央：左右比較映像／画像
-    drawMedia(c, state.panels.before, 0, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "BEFORE");
-    drawMedia(c, state.panels.after, PANEL_W + GAP, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "AFTER");
+    // 中央：レイアウト別の比較映像／画像描画
+    let beforeVis = null, afterVis = null, splitX = 0;
+    if (state.layout === "wipe") {
+      const ratio = getWipeRatio(opt);
+      splitX = Math.round(LW * ratio);
+      const full = { x: 0, y: g.panelY, w: LW, h: g.panelH };
+      beforeVis = { x: 0, y: g.panelY, w: splitX, h: g.panelH };
+      afterVis = { x: splitX, y: g.panelY, w: LW - splitX, h: g.panelH };
+      drawMedia(c, state.panels.before, full.x, full.y, full.w, full.h, th, opt.preview, "BEFORE", beforeVis);
+      drawMedia(c, state.panels.after, full.x, full.y, full.w, full.h, th, opt.preview, "AFTER", afterVis);
+    } else {
+      beforeVis = getPanelFrame("before");
+      afterVis = getPanelFrame("after");
+      drawMedia(c, state.panels.before, beforeVis.x, beforeVis.y, beforeVis.w, beforeVis.h, th, opt.preview, "BEFORE", beforeVis);
+      drawMedia(c, state.panels.after, afterVis.x, afterVis.y, afterVis.w, afterVis.h, th, opt.preview, "AFTER", afterVis);
+    }
 
-    // キャッシュ済み文字・バッジ・透かしレイヤーを1回のGPUテクスチャ転送で合成（毎フレームのmeasureText/fillText負荷をゼロ化）
+    // 患者様の顔ぼかし描画（動画・写真のフレームに追従し、バッジや基準線より下に合成）
+    if (state.faceBlur && FACE) {
+      const showRing = !!(opt.preview && (
+        (drag && drag.kind === "blur") ||
+        Date.now() < blurRingUntil ||
+        !state.playing
+      ));
+      [["before", beforeVis], ["after", afterVis]].forEach(([w, vis]) => {
+        const bg = computeBlurGeom(w, vis);
+        if (!bg) return;
+        FACE.drawSmoothOvalBlur(c, W, H, LW, g.LH, bg.clipRect, { x: bg.cx, y: bg.cy }, { rx: bg.rx, ry: bg.ry });
+        if (showRing || (opt.preview && state.panels[w].blur.status === "fallback")) {
+          const isActive = !!(drag && drag.kind === "blur" && drag.which === w);
+          FACE.drawPreviewRing(c, W, H, LW, g.LH, bg.clipRect, { x: bg.cx, y: bg.cy }, { rx: bg.rx, ry: bg.ry }, isActive);
+        }
+      });
+    }
+
+    // キャッシュ済み文字・基準線・スタンプ・バッジ・透かしレイヤーを1回のGPUテクスチャ転送で合成
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.drawImage(ov, 0, 0);
 
-    // 文字ドラッグ中のガイド線（ドラッグ中のみ描画）
+    // スライド比較時のワイプ境界バー＆◀▶ハンドル
+    if (state.layout === "wipe") {
+      c.setTransform(W / LW, 0, 0, H / g.LH, 0, 0);
+      drawWipeBar(c, g, splitX, th);
+    }
+
+    // 文字ドラッグ中のガイド線（プレビュードラッグ中のみ描画）
     if (opt.preview && drag && drag.kind === "text") {
-      c.setTransform(W / LW, 0, 0, H / LH, 0, 0);
+      c.setTransform(W / LW, 0, 0, H / g.LH, 0, 0);
       if (state.textPos[drag.key].dx === 0) {
         c.strokeStyle = "rgba(53,194,138,0.75)";
         c.lineWidth = 3;
         c.setLineDash([12, 10]);
-        c.beginPath(); c.moveTo(LW / 2, 0); c.lineTo(LW / 2, LH); c.stroke();
+        c.beginPath(); c.moveTo(LW / 2, 0); c.lineTo(LW / 2, g.LH); c.stroke();
       }
       const tb = textBoxes[drag.key];
       if (tb) {
@@ -1107,6 +2249,15 @@
         rr(c, tb.x, tb.y, tb.w, tb.h, 16);
         c.stroke();
       }
+    }
+
+    // 動画ラスト2秒の予約・LINE誘導カット フェードイン合成
+    if (endAlpha > 0) {
+      const ec = getEndCardCanvas(W, H, opt);
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.globalAlpha = endAlpha;
+      c.drawImage(ec, 0, 0);
+      c.globalAlpha = 1;
     }
     c.restore();
   }
@@ -1127,6 +2278,7 @@
     const d = v.duration;
     return isFinite(d) && d > 0 && v.currentTime >= d - 0.04;
   }
+  let ringWasVisible = false;
   function tick() {
     if (!state.exporting) {
       const vids = videos();
@@ -1141,6 +2293,15 @@
 
       // 変更がないアイドル時や、120Hz画面での30fps動画のフレーム間では再描画を完全にスキップしGPU/CPU負荷をゼロにする
       let needDraw = previewDirty;
+      const ringNow = state.faceBlur && Date.now() < blurRingUntil;
+      if (ringWasVisible && !ringNow) needDraw = true;
+      ringWasVisible = ringNow;
+
+      if (state.layout === "wipe" && state.playing && !state.wipeManual &&
+          !(drag && drag.kind === "wipe") && !(state.endCard.enabled && state.endCard.previewing)) {
+        needDraw = true;
+      }
+
       for (let i = 0; i < vids.length; i++) {
         const p = vids[i];
         const uh = shouldUseHold(p);
@@ -1195,6 +2356,7 @@
   function destroyPanelMedia(p) {
     if (!p) return;
     p.scanId++;
+    if (p.blur) p.blur.trackId++;
     p.scanning = false;
     p.warming = false;
     p.warmed = false;
@@ -1577,13 +2739,16 @@
 
     const url = URL.createObjectURL(file);
     const done = (el, type) => {
+      const keepBlurEnabled = p.blur ? p.blur.enabled : true;
+      const keepBlurScale = p.blur ? p.blur.scale : 1;
       destroyPanelMedia(p);
       Object.assign(p, {
         type, el, url, name: file.name, zoom: 1, ox: 0, oy: 0,
         trimStart: 0, autoTrimSec: 0, autoDetected: false,
         scanning: false, scanPromise: null, audioSrc: null,
         holdCanvas: null, hasHold: false, warmed: false, warming: false,
-        frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null
+        frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null,
+        blur: Object.assign(newBlur(), { enabled: keepBlurEnabled, scale: keepBlurScale })
       });
       if (type === "video") {
         attachVideoFrameTracker(p, el);
@@ -1592,8 +2757,12 @@
       }
       $("zoom" + cap(which)).value = 1;
       refreshPick();
+      refreshBlurStatusUI();
       setMsg("");
       markDirty();
+      if (state.faceBlur && p.blur.enabled) {
+        p.blur.trackPromise = runFaceTrack(which, false);
+      }
       if (type === "video") {
         if (state.autoSync && MOTION) {
           autoDetectPanel(which);
@@ -1642,6 +2811,7 @@
     destroyPanelMedia(p);
     state.panels[which] = newPanel();
     refreshPick();
+    refreshBlurStatusUI();
     $("zoom" + cap(which)).value = 1;
     markDirty();
   }
@@ -1704,6 +2874,7 @@
 
   function setPlaying(on) {
     state.playing = on;
+    if (on) state.wipeManual = false;
     $("btnPlay").textContent = on ? "⏸ 停止" : "▶ 再生";
     clearLoopTimer();
     const vids = videos();
@@ -1724,12 +2895,81 @@
 
   // ---------- プレビュー操作（ドラッグ/ホイール/ドロップ） ----------
   function logical(e) {
+    const g = getGeom();
     const r = pv.getBoundingClientRect();
-    return { x: (e.clientX - r.left) / r.width * LW, y: (e.clientY - r.top) / r.height * LH };
+    return { x: (e.clientX - r.left) / r.width * LW, y: (e.clientY - r.top) / r.height * g.LH };
   }
   function hitPanel(pt) {
-    if (pt.y < PANEL_Y || pt.y > PANEL_Y + PANEL_H) return null;
-    return pt.x < PANEL_W + GAP / 2 ? "before" : "after";
+    const g = getGeom();
+    if (pt.y < g.panelY || pt.y > g.bottomY) return null;
+    if (state.layout === "split-v") {
+      return pt.y < (g.panelY + g.panelH / 2) ? "before" : "after";
+    }
+    if (state.layout === "wipe") {
+      return pt.x < (getWipeRatio({ preview: true }) * LW) ? "before" : "after";
+    }
+    return pt.x < LW / 2 ? "before" : "after";
+  }
+  function hitMarker(pt) {
+    const list = state.posture.markers;
+    if (!list.length) return null;
+    const g = getGeom();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i];
+      const mx = clamp(m.nx, 0.04, 0.96) * LW;
+      const my = g.panelY + clamp(m.ny, 0.04, 0.96) * g.panelH;
+      const rad = 74 * clamp(m.scale || 1, 0.7, 1.8);
+      if (Math.hypot(pt.x - mx, pt.y - my) <= rad) return m;
+    }
+    return null;
+  }
+  function hitWipe(pt) {
+    if (state.layout !== "wipe") return false;
+    const g = getGeom();
+    if (pt.y < g.panelY || pt.y > g.bottomY) return false;
+    const splitX = getWipeRatio({ preview: true }) * LW;
+    const hy = g.panelY + g.panelH * 0.5;
+    return Math.hypot(pt.x - splitX, pt.y - hy) <= 64 || Math.abs(pt.x - splitX) <= 28;
+  }
+  function hitPostureLine(pt) {
+    if (!state.posture.lines) return null;
+    const g = getGeom();
+    if (pt.y < g.panelY - 26 || pt.y > g.bottomY + 26) return null;
+    const y1 = g.panelY + state.posture.y1 * g.panelH;
+    const y2 = g.panelY + state.posture.y2 * g.panelH;
+    const d1 = Math.abs(pt.y - y1);
+    const d2 = Math.abs(pt.y - y2);
+    if (Math.min(d1, d2) > 32) return null;
+    return d1 <= d2 ? "y1" : "y2";
+  }
+  function getPreviewVisRects() {
+    const g = getGeom();
+    if (state.layout === "wipe") {
+      const splitX = Math.round(LW * getWipeRatio({ preview: true }));
+      return {
+        before: { x: 0, y: g.panelY, w: splitX, h: g.panelH },
+        after:  { x: splitX, y: g.panelY, w: LW - splitX, h: g.panelH }
+      };
+    }
+    return {
+      before: getPanelFrame("before"),
+      after:  getPanelFrame("after")
+    };
+  }
+  function hitFaceBlur(pt) {
+    if (!state.faceBlur || !FACE) return null;
+    const vis = getPreviewVisRects();
+    for (const w of ["before", "after"]) {
+      const vr = vis[w];
+      if (pt.x < vr.x || pt.x > vr.x + vr.w || pt.y < vr.y || pt.y > vr.y + vr.h) continue;
+      const bg = computeBlurGeom(w, vr);
+      if (!bg) continue;
+      const rx = Math.max(46, bg.rx * 1.15);
+      const ry = Math.max(50, bg.ry * 1.15);
+      const nd = ((pt.x - bg.cx) / rx) ** 2 + ((pt.y - bg.cy) / ry) ** 2;
+      if (nd <= 1) return { which: w, bg };
+    }
+    return null;
   }
   function hitText(pt) {
     let best = null, bestDist = Infinity;
@@ -1750,7 +2990,43 @@
     const pt = logical(e);
     pv.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, pt);
+    if (state.endCard.enabled && state.endCard.previewing) {
+      drag = null;
+      pinch = null;
+      return;
+    }
     if (pointers.size === 1) {
+      const mk = hitMarker(pt);
+      if (mk) {
+        state.posture.selectedId = mk.id;
+        drag = { kind: "marker", marker: mk, last: pt };
+        markDirty();
+        pinch = null;
+        return;
+      }
+      if (hitWipe(pt)) {
+        state.wipeManual = true;
+        state.wipePos = clamp(pt.x / LW, 0.08, 0.92);
+        drag = { kind: "wipe" };
+        markDirty();
+        pinch = null;
+        return;
+      }
+      const pLine = hitPostureLine(pt);
+      if (pLine) {
+        drag = { kind: "pline", key: pLine };
+        markDirty();
+        pinch = null;
+        return;
+      }
+      const fb = hitFaceBlur(pt);
+      if (fb) {
+        blurRingUntil = Date.now() + 3000;
+        drag = { kind: "blur", which: fb.which, last: pt };
+        markDirty();
+        pinch = null;
+        return;
+      }
       const tKey = hitText(pt);
       if (tKey) {
         drag = {
@@ -1782,10 +3058,49 @@
       return;
     }
     if (!drag) return;
+    const g = getGeom();
+    if (drag.kind === "marker") {
+      const m = drag.marker;
+      m.nx = clamp(m.nx + (pt.x - drag.last.x) / LW, 0.04, 0.96);
+      m.ny = clamp(m.ny + (pt.y - drag.last.y) / g.panelH, 0.04, 0.96);
+      drag.last = pt;
+      markDirty();
+      return;
+    }
+    if (drag.kind === "wipe") {
+      state.wipeManual = true;
+      state.wipePos = clamp(pt.x / LW, 0.08, 0.92);
+      markDirty();
+      return;
+    }
+    if (drag.kind === "pline") {
+      state.posture[drag.key] = clamp((pt.y - g.panelY) / g.panelH, 0.04, 0.96);
+      markDirty();
+      return;
+    }
+    if (drag.kind === "blur") {
+      const p = state.panels[drag.which];
+      const bg = computeBlurGeom(drag.which, null);
+      if (p && bg && bg.dw > 0 && bg.dh > 0) {
+        const dmx = (pt.x - drag.last.x) / bg.dw;
+        const dmy = (pt.y - drag.last.y) / bg.dh;
+        if (p.blur.mode === "fixed") {
+          p.blur.fixedX = clamp(p.blur.fixedX + dmx, 0.03, 0.97);
+          p.blur.fixedY = clamp(p.blur.fixedY + dmy, 0.03, 0.97);
+        } else {
+          p.blur.offsetX = clamp((p.blur.offsetX || 0) + dmx, -0.85, 0.85);
+          p.blur.offsetY = clamp((p.blur.offsetY || 0) + dmy, -0.85, 0.85);
+        }
+        blurRingUntil = Date.now() + 2800;
+      }
+      drag.last = pt;
+      markDirty();
+      return;
+    }
     if (drag.kind === "text") {
-      const b = TEXT_BASE[drag.key];
+      const b = textBaseFor(drag.key);
       drag.rawDx = clamp(drag.rawDx + (pt.x - drag.last.x), 80 - b.x, LW - 80 - b.x);
-      drag.rawDy = clamp(drag.rawDy + (pt.y - drag.last.y), 60 - b.y, LH - 60 - b.y);
+      drag.rawDy = clamp(drag.rawDy + (pt.y - drag.last.y), 45 - b.y, g.LH - 45 - b.y);
       state.textPos[drag.key].dx = Math.abs(drag.rawDx) < 24 ? 0 : Math.round(drag.rawDx);
       state.textPos[drag.key].dy = Math.round(drag.rawDy);
       drag.last = pt;
@@ -1795,23 +3110,29 @@
       return;
     }
     const p = state.panels[drag.which];
-    const { rx, ry } = panelRange(p, PANEL_W, PANEL_H);
+    const pf = getPanelFrame(drag.which);
+    const { rx, ry } = panelRange(p, pf.w, pf.h);
     if (rx > 0) p.ox = clamp(p.ox + (pt.x - drag.last.x) / rx, -1, 1);
     if (ry > 0) p.oy = clamp(p.oy + (pt.y - drag.last.y) / ry, -1, 1);
     drag.last = pt;
     markDirty();
   });
   const endPtr = (e) => {
-    const hadTextDrag = !!(drag && drag.kind === "text");
-    if (hadTextDrag && drag.moved && pointers.size <= 1) saveSettings();
+    const hadOverlayDrag = !!(drag && (drag.kind === "text" || drag.kind === "blur"));
+    if (drag && drag.kind === "text" && drag.moved && pointers.size <= 1) saveSettings();
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
     if (!pointers.size) drag = null;
-    if (hadTextDrag) markDirty();
+    if (hadOverlayDrag) markDirty();
   };
   pv.addEventListener("pointerdown", (e) => {
     const pt = logical(e);
-    tapStart = hitText(pt) ? null : pt;
+    if ((state.endCard.enabled && state.endCard.previewing) ||
+        hitMarker(pt) || hitWipe(pt) || hitPostureLine(pt) || hitFaceBlur(pt) || hitText(pt)) {
+      tapStart = null;
+      return;
+    }
+    tapStart = pt;
   }, true);
   pv.addEventListener("pointerup", (e) => {
     const pt = logical(e), which = hitPanel(pt);
@@ -1822,14 +3143,35 @@
   pv.addEventListener("pointerup", endPtr);
   pv.addEventListener("pointercancel", endPtr);
   pv.addEventListener("wheel", (e) => {
-    const which = hitPanel(logical(e)); if (!which) return;
+    const pt = logical(e);
+    if (state.endCard.enabled && state.endCard.previewing) return;
+    const mk = hitMarker(pt);
+    if (mk) {
+      e.preventDefault();
+      mk.scale = clamp((mk.scale || 1) * (e.deltaY < 0 ? 1.07 : 0.93), 0.55, 2.0);
+      markDirty();
+      return;
+    }
+    const fb = hitFaceBlur(pt);
+    if (fb) {
+      e.preventDefault();
+      const p = state.panels[fb.which];
+      p.blur.scale = clamp(Math.round(p.blur.scale * (e.deltaY < 0 ? 1.06 : 0.94) * 20) / 20, 0.55, 2.3);
+      const szEl = $("blurSize" + cap(fb.which));
+      if (szEl) szEl.value = String(p.blur.scale);
+      blurRingUntil = Date.now() + 2200;
+      markDirty();
+      return;
+    }
+    const which = hitPanel(pt); if (!which) return;
     e.preventDefault();
     setZoom(which, state.panels[which].zoom * (e.deltaY < 0 ? 1.05 : 0.95));
   }, { passive: false });
   pv.addEventListener("dragover", (e) => e.preventDefault());
   pv.addEventListener("drop", (e) => {
     e.preventDefault();
-    const which = hitPanel(logical(e)) || (logical(e).x < LW / 2 ? "before" : "after");
+    const pt = logical(e);
+    const which = hitPanel(pt) || (pt.x < LW / 2 ? "before" : "after");
     loadFile(which, e.dataTransfer.files[0]);
   });
 
@@ -1837,7 +3179,8 @@
     const p = state.panels[which];
     p.zoom = clamp(z, 1, 3);
     $("zoom" + cap(which)).value = p.zoom;
-    const { rx, ry } = panelRange(p, PANEL_W, PANEL_H);   // ズーム縮小時のはみ出し補正
+    const pf = getPanelFrame(which);
+    const { rx, ry } = panelRange(p, pf.w, pf.h);   // ズーム縮小時のはみ出し補正
     if (rx === 0) p.ox = 0; if (ry === 0) p.oy = 0;
     markDirty();
   }
@@ -1845,11 +3188,17 @@
   // ---------- 書き出し＆各種SNS投稿 ----------
   function lim() { return pro ? CFG.LIMITS.pro : CFG.LIMITS.free; }
   function exportSize() {
+    const sp = getSpec();
     const hq = pro && $("selQuality").value === "1080";
-    return hq ? { w: CFG.LIMITS.pro.width, h: CFG.LIMITS.pro.height } : { w: CFG.LIMITS.free.width, h: CFG.LIMITS.free.height };
+    return hq ? { w: sp.proW, h: sp.proH } : { w: sp.freeW, h: sp.freeH };
   }
   function currentExportMode() {
-    return (videos().length || state.bgm.enabled) ? "video" : "image";
+    return (videos().length || state.bgm.enabled || state.endCard.enabled) ? "video" : "image";
+  }
+  function serializeBlurKey(p) {
+    if (!state.faceBlur || !p.blur || !p.blur.enabled) return "0";
+    const b = p.blur;
+    return `${b.mode},${b.scale},${b.fixedX.toFixed(4)},${b.fixedY.toFixed(4)},${b.baseR.toFixed(4)},${(b.offsetX || 0).toFixed(4)},${(b.offsetY || 0).toFixed(4)},${b.keyframes.length},${b.status}`;
   }
   function exportSignature(modeOverride) {
     const mode = modeOverride || currentExportMode();
@@ -1857,11 +3206,21 @@
     const b = state.panels.before, a = state.panels.after;
     return [
       mode, w, h, pro ? 1 : 0,
+      state.aspect,
+      state.layout,
+      (mode === "image" && state.layout === "wipe") ? state.wipePos.toFixed(4) : "",
       $("selAudio") ? $("selAudio").value : "none",
       state.theme,
       state.theme === "custom" ? `${state.custom.bg},${state.custom.text},${state.custom.accent}` : "",
       logoUrl || "",
       state.symptom, state.age, state.clinic, state.sub,
+      state.disclaimer.enabled ? state.disclaimer.text : "",
+      serializePostureKey(),
+      serializeBlurKey(b),
+      serializeBlurKey(a),
+      (mode === "video" && state.endCard.enabled)
+        ? `1|${state.endCard.area}|${state.endCard.offer}|${state.endCard.cta}`
+        : "0",
       state.textPos.symptom.dx, state.textPos.symptom.dy,
       state.textPos.age.dx, state.textPos.age.dy,
       state.textPos.clinic.dx, state.textPos.clinic.dy,
@@ -1899,19 +3258,44 @@
   }
   const stamp = () => { const d = new Date(), z = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`; };
 
+  async function ensureFaceTrackingReady() {
+    if (!state.faceBlur || !FACE) return;
+    const jobs = [];
+    ["before", "after"].forEach((w) => {
+      const p = state.panels[w];
+      if (!p || !p.el || !p.blur || !p.blur.enabled) return;
+      if (p.blur.status === "idle" && p.blur.mode !== "fixed") {
+        p.blur.trackPromise = runFaceTrack(w, false);
+      }
+      if (p.blur.status === "tracking" && p.blur.trackPromise) {
+        jobs.push(p.blur.trackPromise);
+      }
+    });
+    if (jobs.length) {
+      setMsg("顔ぼかしの追従位置を準備しています…");
+      await Promise.race([
+        Promise.all(jobs),
+        new Promise((r) => setTimeout(r, 4500))
+      ]);
+    }
+  }
+
   async function savePng(opts) {
     const doDownload = !(opts && opts.download === false);
     if (!state.panels.before.el && !state.panels.after.el) {
       setMsg("先にビフォー／アフターの画像か動画を追加してください。", "err");
       return null;
     }
+    if (!checkProGateBeforeExport()) return null;
     if (pro && apiBase()) {
       await verifyActiveLicense({ silent: false, force: false });
+      if (!checkProGateBeforeExport()) return null;
     }
+    await ensureFaceTrackingReady();
     const { w, h } = exportSize();
     const sig = exportSignature("image");
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
-    render(cv.getContext("2d"), w, h, {});
+    render(cv.getContext("2d"), w, h, { staticWipe: true });
     const blob = await new Promise((res) => cv.toBlob(res, "image/png"));
     if (!blob) {
       setMsg("PNGの作成に失敗しました。", "err");
@@ -1936,22 +3320,24 @@
   async function saveVideo(opts) {
     if (state.exporting) return null;
     const doDownload = !(opts && opts.download === false);
-    syncToken++;
-    syncingVideos = false;
-    clearLoopTimer();
-    stopBgmPreview();
     if (!state.panels.before.el && !state.panels.after.el) {
       setMsg("先にビフォー／アフターの写真か動画を追加してください。", "err");
       return null;
     }
+    if (!checkProGateBeforeExport()) return null;
     const vids = videos();
-    if (!vids.length && !state.bgm.enabled) {
+    if (!vids.length && !state.bgm.enabled && !state.endCard.enabled) {
       return await savePng(opts);
     }
     if (!window.MediaRecorder) {
       setMsg("このブラウザは動画書き出しに非対応です。Chrome / Edge / Safari 最新版をお使いください。", "err");
       return null;
     }
+
+    syncToken++;
+    syncingVideos = false;
+    clearLoopTimer();
+    stopBgmPreview();
 
     const mime = pickMime();
     const ext = mime.includes("mp4") ? "mp4" : "webm";
@@ -1979,10 +3365,13 @@
     let resultExp = null;
 
     try {
-      // 書き出し前にライセンスの有効状態を再照合（解約・未払い時は自動で無料プラン＝720p・透かしありへ切り戻す）
+      // 書き出し前にライセンスの有効状態を再照合（解約・未払い時は自動で無料プランへ切り戻す）
       if (pro && apiBase()) {
         await verifyActiveLicense({ silent: false, force: false });
+        if (!checkProGateBeforeExport()) return null;
       }
+      await ensureFaceTrackingReady();
+
       const { w, h } = exportSize();
       const maxSec = lim().maxSeconds;
       const sig = exportSignature("video");
@@ -1995,17 +3384,27 @@
         await Promise.all(pendingScans);
       }
 
-      let dur;
+      let baseDur;
       if (vids.length) {
         const longest = Math.max(...vids.map(p => {
           const d = p.el.duration || 0;
           const ts = clamp(p.trimStart || 0, 0, maxTrimFor(p));
           return isFinite(d) && d > 0 ? Math.max(0.5, d - ts) : 0;
         }));
-        dur = Math.min(maxSec, isFinite(longest) && longest > 0 ? longest : maxSec);
+        baseDur = Math.min(maxSec, isFinite(longest) && longest > 0 ? longest : maxSec);
       } else {
-        dur = Math.min(maxSec, state.bgm.photoSec || 8);
+        baseDur = Math.min(maxSec, state.bgm.photoSec || 8);
       }
+      const wantEndCard = !!state.endCard.enabled;
+      const dur = wantEndCard
+        ? Math.min(maxSec, Math.max(3.2, baseDur + END_CARD_ADD_SEC))
+        : baseDur;
+      const endCardStart = wantEndCard ? Math.max(0.8, dur - END_CARD_ADD_SEC) : Infinity;
+      const calcEndAlpha = (tSec) => {
+        if (!wantEndCard || tSec <= endCardStart) return 0;
+        const u = clamp((tSec - endCardStart) / 0.42, 0, 1);
+        return 1 - Math.pow(1 - u, 3);
+      };
 
       // 録画開始前に各動画を並列シーク（未ウォームアップの場合のみ初回温め）
       if (vids.length) {
@@ -2048,15 +3447,16 @@
       rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
       const stopped = new Promise((res) => { rec.onstop = res; });
 
-      // 書き出し用オーバーレイキャッシュを事前生成してから録画開始
-      render(cctx, w, h, {});
+      // 書き出し用オーバーレイ＆エンドカードのキャッシュを録画開始前に事前生成し、録画中の文字計測スパイクをゼロ化
+      if (wantEndCard) getEndCardCanvas(w, h, {});
+      render(cctx, w, h, { wipeTime: 0, endCardAlpha: 0 });
       pctx.drawImage(cv, 0, 0, pv.width, pv.height);
 
       if (vids.length) {
         const startCts = vids.map(p => (p.el ? p.el.currentTime : 0));
         await Promise.all(vids.map(p => p.el.play().catch(() => {})));
         await Promise.all(vids.map((p, idx) => waitLivePlaybackFrame(p.el, startCts[idx], 85, () => false)));
-        render(cctx, w, h, {});
+        render(cctx, w, h, { wipeTime: 0, endCardAlpha: 0 });
       }
       if (wantBgm && audioCtx && dest) {
         bgmRec = BGM.start(audioCtx, dest, {
@@ -2078,7 +3478,7 @@
           // 120Hz/60Hz端末でも captureStream(30) に合わせた約30fps間隔でのみ合成し、エンコーダのGPU/CPU帯域を確保
           if (now - lastExportDraw >= 31 || t >= dur) {
             lastExportDraw = now;
-            render(cctx, w, h, {});
+            render(cctx, w, h, { wipeTime: t, endCardAlpha: calcEndAlpha(t) });
             if ((exportedFrames++ & 1) === 0) {
               pctx.drawImage(cv, 0, 0, pv.width, pv.height);
             }
@@ -2124,7 +3524,7 @@
   }
 
   function runCurrentExport(opts) {
-    return (videos().length || state.bgm.enabled) ? saveVideo(opts) : savePng(opts);
+    return currentExportMode() === "video" ? saveVideo(opts) : savePng(opts);
   }
 
   // ---------- SNS投稿文自動生成・共有シート／投稿画面起動 ----------
@@ -2191,6 +3591,7 @@
     const age = (state.age || "").trim();
     const clinic = (state.clinic || "").trim();
     const sub = (state.sub || "").trim();
+    const footer = (state.snsFooter || "").trim();
 
     const lines = [sym ? `【${sym}のビフォーアフター】` : "【施術ビフォーアフター】"];
     const meta = [age, sub].filter(Boolean).join("／");
@@ -2201,6 +3602,11 @@
       ? `同じような「${sym}」でお悩みの方はぜひ一度ご相談ください✨`
       : "お身体の不調や姿勢のお悩みはお気軽にご相談ください✨");
     if (clinic) lines.push(`📍 ${clinic}`);
+
+    if (footer) {
+      lines.push("");
+      lines.push(footer);
+    }
 
     const tags = [];
     const addTag = (t) => {
@@ -2357,6 +3763,7 @@
       setMsg("先に「1. 写真・動画を選ぶ」でビフォー／アフターの画像か動画を追加してください。", "err");
       return;
     }
+    if (!checkProGateBeforeExport()) return;
 
     const caption = getCaptionText();
     const mobileShare = isMobileOrTablet() && supportsFileShare;
@@ -2408,6 +3815,7 @@
       setMsg("先に「1. 写真・動画を選ぶ」でビフォー／アフターの画像か動画を追加してください。", "err");
       return;
     }
+    if (!checkProGateBeforeExport()) return;
     const caption = getCaptionText();
     if (isExportFresh() && lastExport.file && canShareFile(lastExport.file)) {
       const res = await shareViaNativeSheet(lastExport, caption, "");
@@ -2439,6 +3847,154 @@
         syncAutoCaption();
         markDirty();
       }));
+
+    // ⑥ サイズ比率 ＆ ④ 比較レイアウト切替
+    document.querySelectorAll("[data-aspect]").forEach((b) => {
+      b.onclick = () => setAspect(b.dataset.aspect);
+    });
+    document.querySelectorAll("[data-layout]").forEach((b) => {
+      b.onclick = () => setLayout(b.dataset.layout);
+    });
+
+    // ① 顔ぼかし（AI自動追従 ＋ 指定位置追従 ＋ 手動固定）
+    $("chkFaceBlur").onchange = (e) => {
+      state.faceBlur = e.target.checked;
+      blurRingUntil = Date.now() + 2800;
+      refreshBlurStatusUI();
+      refreshProTrialUI();
+      markDirty();
+      if (state.faceBlur) {
+        ["before", "after"].forEach((w) => {
+          const p = state.panels[w];
+          if (p.el && p.blur.enabled && p.blur.status === "idle") {
+            p.blur.trackPromise = runFaceTrack(w, false);
+          }
+        });
+      }
+    };
+    ["before", "after"].forEach((w) => {
+      const W = cap(w);
+      $("chkBlur" + W).onchange = (e) => {
+        const p = state.panels[w];
+        p.blur.enabled = e.target.checked;
+        blurRingUntil = Date.now() + 2200;
+        refreshBlurStatusUI();
+        markDirty();
+        if (state.faceBlur && p.blur.enabled && p.el && p.blur.status === "idle") {
+          p.blur.trackPromise = runFaceTrack(w, false);
+        }
+      };
+      $("selBlurMode" + W).onchange = (e) => {
+        const p = state.panels[w];
+        const nextMode = e.target.value;
+        if (nextMode === "fixed") {
+          if (FACE) {
+            const curT = (p.type === "video" && p.el) ? p.el.currentTime : 0;
+            const cur = FACE.sampleAtTime(p.blur, curT);
+            p.blur.fixedX = cur.mx;
+            p.blur.fixedY = cur.my;
+            p.blur.baseR = cur.mr;
+            p.blur.offsetX = 0;
+            p.blur.offsetY = 0;
+          }
+          p.blur.mode = "fixed";
+          p.blur.status = "fixed";
+          blurRingUntil = Date.now() + 2600;
+          refreshBlurStatusUI();
+          markDirty();
+        } else if (nextMode === "patch") {
+          p.blur.mode = "patch";
+          if (p.el) p.blur.trackPromise = runFaceTrack(w, true);
+          else refreshBlurStatusUI();
+        } else {
+          p.blur.mode = "auto";
+          if (p.el) p.blur.trackPromise = runFaceTrack(w, false);
+          else refreshBlurStatusUI();
+        }
+      };
+      $("blurSize" + W).oninput = (e) => {
+        state.panels[w].blur.scale = clamp(parseFloat(e.target.value) || 1, 0.55, 2.3);
+        blurRingUntil = Date.now() + 1800;
+        markDirty();
+      };
+      $("btnRetrack" + W).onclick = () => {
+        const p = state.panels[w];
+        if (!p.el) {
+          setMsg("先に写真・動画を追加してから「今の丸の位置から追従」を押してください。", "err");
+          return;
+        }
+        p.blur.enabled = true;
+        p.blur.trackPromise = runFaceTrack(w, true);
+      };
+    });
+
+    // ② 姿勢チェック基準線・注目スタンプ（赤丸・矢印）
+    $("chkPostureGrid").onchange = (e) => {
+      state.posture.grid = e.target.checked;
+      refreshProTrialUI();
+      markDirty();
+    };
+    $("chkPostureLines").onchange = (e) => {
+      state.posture.lines = e.target.checked;
+      refreshProTrialUI();
+      markDirty();
+    };
+    $("btnAddCircle").onclick = () => addMarker("circle");
+    $("btnAddArrow").onclick = () => addMarker("arrow");
+    $("btnRotateMarker").onclick = rotateSelectedMarker;
+    $("btnClearMarkers").onclick = clearAllMarkers;
+
+    // ③ 動画ラスト2秒の予約・LINE誘導カット（リール特化・QRなし）
+    $("chkEndCard").onchange = (e) => {
+      state.endCard.enabled = e.target.checked;
+      if (!state.endCard.enabled) state.endCard.previewing = false;
+      $("endCardBody").hidden = !state.endCard.enabled;
+      refreshEndCardPreviewBtn();
+      refreshBgmUI();
+      refreshProTrialUI();
+      markDirty();
+    };
+    [["inEndArea", "area"], ["inEndOffer", "offer"], ["inEndCta", "cta"]].forEach(([id, key]) => {
+      $(id).addEventListener("input", (e) => {
+        state.endCard[key] = e.target.value;
+        saveSettings();
+        markDirty();
+      });
+    });
+    $("btnPreviewEndCard").onclick = () => {
+      state.endCard.previewing = !state.endCard.previewing;
+      refreshEndCardPreviewBtn();
+      markDirty();
+    };
+
+    // ⑤ 免責ミニテロップ・症状別テンプレート保存・SNS固定フッター
+    $("chkDisclaimer").onchange = (e) => {
+      state.disclaimer.enabled = e.target.checked;
+      $("disclaimerBody").hidden = !state.disclaimer.enabled;
+      refreshProTrialUI();
+      markDirty();
+    };
+    $("inDisclaimer").addEventListener("input", (e) => {
+      state.disclaimer.text = e.target.value;
+      saveSettings();
+      markDirty();
+    });
+    $("btnSavePreset").onclick = saveCurrentPreset;
+    $("inPresetName").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); saveCurrentPreset(); }
+    });
+    $("inSnsFooter").addEventListener("input", (e) => {
+      state.snsFooter = e.target.value;
+      state.preferredSnsFooter = state.snsFooter;
+      saveSettings();
+      syncAutoCaption();
+      refreshProTrialUI();
+    });
+
+    // 無料プランお試しバー・モーダル内ワンタップ解除
+    $("btnTrialUpgrade").onclick = () => openModal();
+    $("btnTrialReset").onclick = resetProOnlyFeatures;
+    $("btnModalResetTrial").onclick = resetProOnlyFeatures;
 
     document.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => $("file" + cap(b.dataset.pick)).click());
     const finishScrub = () => {
@@ -2527,6 +4083,7 @@
     $("btnSwap").onclick = () => {
       const t = state.panels.before; state.panels.before = state.panels.after; state.panels.after = t;
       refreshPick();
+      refreshBlurStatusUI();
       ["before", "after"].forEach(w => {
         $("zoom" + cap(w)).value = state.panels[w].zoom;
       });
@@ -2539,15 +4096,17 @@
       renderThemes();
     }));
 
-    Object.entries(TEXT_BASE).forEach(([k, b]) => {
-      $(b.slider).addEventListener("input", (e) => {
-        state.textPos[k].dy = clamp(parseInt(e.target.value, 10) || b.y, 60, LH - 60) - b.y;
+    Object.entries(TEXT_SLIDERS).forEach(([k, sliderId]) => {
+      $(sliderId).addEventListener("input", (e) => {
+        const g = getGeom();
+        const b = textBaseFor(k);
+        state.textPos[k].dy = clamp(parseInt(e.target.value, 10) || b.y, 45, g.LH - 45) - b.y;
         saveSettings();
         markDirty();
       });
     });
     $("btnCenterTextX").onclick = () => {
-      Object.keys(TEXT_BASE).forEach((k) => { state.textPos[k].dx = 0; });
+      Object.keys(TEXT_SLIDERS).forEach((k) => { state.textPos[k].dx = 0; });
       saveSettings();
       markDirty();
     };
@@ -2614,7 +4173,9 @@
     $("btnLogoClear").onclick = clearLogo;
 
     $("selQuality").onchange = (e) => {
-      if (e.target.value === "1080" && !requirePro("1080×1920 高画質")) e.target.value = "720";
+      const sp = getSpec();
+      if (e.target.value === "1080" && !requirePro(`${sp.proW}×${sp.proH} 高画質`)) e.target.value = "720";
+      refreshQualityLabels();
       refreshSnsUI();
     };
     $("selAudio").onchange = () => refreshSnsUI();
@@ -2663,7 +4224,7 @@
         $("keyMsg").textContent = "";
         $("proMsg").textContent = "⭐ 有料プランを有効化しました！";
         $("proMsg").className = "msg ok";
-        setMsg("⭐ 有料プランを有効化しました（透かしなし・1080×1920フルHD）。", "ok");
+        setMsg("⭐ 有料プランを有効化しました（透かしなし・全プロ機能が解放されました）。", "ok");
       } catch (e) {
         $("keyMsg").textContent = e.message || "有効化に失敗しました。";
         $("keyMsg").className = "msg err";
