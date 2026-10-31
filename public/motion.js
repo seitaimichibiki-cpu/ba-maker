@@ -164,6 +164,18 @@
     return normalizeFrame(luma);
   }
 
+  let sharedScanCtx = null;
+  function getScanCtx() {
+    if (!sharedScanCtx) {
+      const cv = document.createElement("canvas");
+      cv.width = GW;
+      cv.height = GH;
+      sharedScanCtx = cv.getContext("2d", { willReadFrequently: true });
+    }
+    return sharedScanCtx;
+  }
+  const yieldStep = () => new Promise((r) => setTimeout(r, 0));
+
   function runScan(videoOrUrl, knownDuration, isCancelled) {
     return new Promise((resolve) => {
       const reuseVideo = !!(videoOrUrl && typeof videoOrUrl === "object" && videoOrUrl.tagName === "VIDEO");
@@ -172,16 +184,17 @@
         v.muted = true;
         v.playsInline = true;
         v.preload = "auto";
-        v.style.cssText = "position:fixed;left:0;top:0;width:4px;height:4px;opacity:0.01;pointer-events:none;z-index:-1";
+        v.width = 2;
+        v.height = 2;
+        v.setAttribute("playsinline", "");
+        v.setAttribute("webkit-playsinline", "");
+        v.style.cssText = "position:fixed;right:2px;bottom:2px;width:2px;height:2px;opacity:0.004;pointer-events:none;z-index:9;contain:strict";
         document.body.appendChild(v);
       } else {
         try { v.pause(); } catch (e) {}
       }
 
-      const cv = document.createElement("canvas");
-      cv.width = GW;
-      cv.height = GH;
-      const ctx = cv.getContext("2d", { willReadFrequently: true });
+      const ctx = getScanCtx();
 
       let cleaned = false;
       const cleanup = (result) => {
@@ -189,6 +202,8 @@
         cleaned = true;
         if (!reuseVideo) {
           try {
+            v.onloadeddata = null;
+            v.onerror = null;
             v.pause();
             v.removeAttribute("src");
             v.load();
@@ -198,7 +213,7 @@
         resolve(result || 0);
       };
 
-      const hardTimer = setTimeout(() => cleanup(0), 3000);
+      const hardTimer = setTimeout(() => cleanup(0), 3200);
 
       const executeScan = async () => {
         try {
@@ -211,11 +226,12 @@
           const times = [];
           const pairScores = [];
 
-          // 1. 0.25秒刻みの高速粗スキャン（明確な歩行開始後は早期終了してシーク回数を最小化）
+          // 1. 0.25秒刻みの高速粗スキャン（毎ステップでメインスレッドへ制御を返しUI凍結を防止）
           for (let t = 0; t <= maxT + 0.001; t = Math.round((t + COARSE_STEP) * 100) / 100) {
             if (isCancelled && isCancelled()) { clearTimeout(hardTimer); cleanup(0); return; }
             await seekOnce(v, t, 240);
             const nf = grabNormalizedLuma(ctx, v);
+            await yieldStep();
             if (!nf) continue;
             if (normFrames.length > 0) {
               pairScores.push(pairMotionScore(normFrames[normFrames.length - 1], nf, t));
@@ -248,7 +264,7 @@
           const res = analyzeDetail(normFrames, times, true);
           let detected = res.trimStart;
 
-          // 2. 粗スキャンで開始区間が見つかった場合のみ、直前0.3秒間を最大3回だけ精密チェック（0.1秒精度）
+          // 2. 粗スキャンで開始区間が見つかった場合のみ、直前0.3秒間を最大2回だけ精密チェック（0.1秒精度）
           if (res.onsetIdx >= 1 && !(isCancelled && isCancelled())) {
             const refIdx = Math.max(0, res.onsetIdx - 2);
             const refNorm = normFrames[refIdx];
@@ -262,6 +278,7 @@
               const tf = Math.round((tLow + (tHigh - tLow) * frac) * 100) / 100;
               await seekOnce(v, tf, 200);
               const nf = grabNormalizedLuma(ctx, v);
+              await yieldStep();
               if (nf && pairMotionScore(refNorm, nf, tf) >= fineTh) {
                 refinedOnset = tf;
                 break;

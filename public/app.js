@@ -40,10 +40,10 @@
   const BGM = window.BAM_BGM;
   const MOTION = window.BAM_MOTION;
 
-  // iPad SafariでデコーダとVSyncをフル稼働させるためのビューポート内背面コンテナ（画面外-9999pxだとWebKitがフレーム供給を間引くため0,0に配置）
+  // WebKit / Blink のオクルージョン間引き（背面隠蔽時のフレーム供給低下）を防ぐため、非隠蔽・極小（2x2px・不透明度0.4%）の前面透過レイヤーに配置
   const mediaPool = document.createElement("div");
   mediaPool.setAttribute("aria-hidden", "true");
-  mediaPool.style.cssText = "position:fixed;left:0;top:0;width:4px;height:4px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:-1";
+  mediaPool.style.cssText = "position:fixed;right:2px;bottom:2px;width:4px;height:2px;overflow:hidden;opacity:0.004;pointer-events:none;z-index:9;contain:strict";
   document.body.appendChild(mediaPool);
 
   // WebKitのGPU（IOSurface / Metal VideoTextureCopierCV）最小加速サイズ（257x257超）を満たすウォームアップ専用キャンバス
@@ -57,7 +57,8 @@
     type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0,
     trimStart: 0, autoTrimSec: 0, autoDetected: false,
     scanning: false, scanId: 0, scanPromise: null, audioSrc: null,
-    holdCanvas: null, hasHold: false, warmed: false, warming: false
+    holdCanvas: null, hasHold: false, warmed: false, warming: false,
+    frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null
   });
   const state = {
     symptom: "", age: "", clinic: "", sub: "",
@@ -78,6 +79,13 @@
   let syncingVideos = false;
   let syncToken = 0;
   let logoUrl = null;
+  let previewDirty = true;
+  let fontEpoch = 0;
+  const fitCache = new Map();
+
+  function markDirty() {
+    previewDirty = true;
+  }
 
   function clearLogo() {
     if (logoUrl) {
@@ -87,6 +95,7 @@
     state.logo = null;
     const btn = $("btnLogoClear");
     if (btn) btn.hidden = true;
+    markDirty();
   }
 
   function stopBgmPreview() {
@@ -756,6 +765,7 @@
       box.appendChild(b);
     });
     $("customBox").hidden = !(pro && state.theme === "custom");
+    markDirty();
   }
 
   // ---------- 描画ヘルパー ----------
@@ -769,12 +779,25 @@
     ctx.closePath();
   }
   function fit(ctx, text, maxW, size, min, weight) {
-    while (size > min) {
-      ctx.font = `${weight} ${size}px ${FONT}`;
-      if (ctx.measureText(text).width <= maxW) return size;
-      size -= 2;
+    const cKey = `${fontEpoch}|${weight}|${maxW}|${size}|${min}|${text}`;
+    const hit = fitCache.get(cKey);
+    if (hit !== undefined) {
+      ctx.font = `${weight} ${hit}px ${FONT}`;
+      return hit;
+    }
+    let cur = size;
+    while (cur > min) {
+      ctx.font = `${weight} ${cur}px ${FONT}`;
+      if (ctx.measureText(text).width <= maxW) {
+        if (fitCache.size > 512) fitCache.clear();
+        fitCache.set(cKey, cur);
+        return cur;
+      }
+      cur -= 2;
     }
     ctx.font = `${weight} ${min}px ${FONT}`;
+    if (fitCache.size > 512) fitCache.clear();
+    fitCache.set(cKey, min);
     return min;
   }
   function mediaSize(p) {
@@ -788,24 +811,31 @@
     const sc = Math.max(w / s.w, h / s.h) * p.zoom;
     return { rx: Math.max(0, (s.w * sc - w) / 2), ry: Math.max(0, (s.h * sc - h) / 2) };
   }
+  function shouldUseHold(p) {
+    return !!(p && p.type === "video" && p.hasHold &&
+      !scrubbingTrim &&
+      (p.scanning || p.warming || syncingVideos || !p.el || p.el.seeking || p.el.readyState < 2));
+  }
   function drawMedia(ctx, p, x, y, w, h, th, placeholder, label) {
-    ctx.save();
-    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
     const s = mediaSize(p);
     if (s) {
-      const sc = Math.max(w / s.w, h / s.h) * p.zoom;
-      const dw = s.w * sc, dh = s.h * sc;
-      const { rx, ry } = panelRange(p, w, h);
-      const dx = x + (w - dw) / 2 + p.ox * rx;
-      const dy = y + (h - dh) / 2 + p.oy * ry;
-      const useHold = p.type === "video" && p.hasHold &&
-        !scrubbingTrim &&
-        (p.scanning || p.warming || syncingVideos || p.el.seeking || p.el.readyState < 2);
-      if (useHold && p.warming && p.el && p.el.readyState >= 2) {
-        // プレビュー本体のGPUコンテキストでも<video>→Metalテクスチャ変換を事前稼働させ、同一フレーム内でホールド画像により上書きする
-        try { ctx.drawImage(p.el, x, y, 32, 32); } catch (e) {}
+      const useHold = shouldUseHold(p);
+      const src = useHold ? p.holdCanvas : p.el;
+      const srcW = useHold ? p.holdCanvas.width : s.w;
+      const srcH = useHold ? p.holdCanvas.height : s.h;
+      if (src && srcW > 0 && srcH > 0) {
+        // ctx.clip() を使わず9引数のソース矩形切り出しで描画し、4K動画のステンシルクリップ＆領域外サンプリング負荷をゼロ化
+        const sc = Math.max(w / srcW, h / srcH) * p.zoom;
+        const dw = srcW * sc, dh = srcH * sc;
+        const rx = Math.max(0, (dw - w) / 2), ry = Math.max(0, (dh - h) / 2);
+        const dx = x + (w - dw) / 2 + p.ox * rx;
+        const dy = y + (h - dh) / 2 + p.oy * ry;
+        const sw = Math.min(srcW, w / sc);
+        const sh = Math.min(srcH, h / sc);
+        const sx = clamp((x - dx) / sc, 0, Math.max(0, srcW - sw));
+        const sy = clamp((y - dy) / sc, 0, Math.max(0, srcH - sh));
+        ctx.drawImage(src, sx, sy, sw, sh, x, y, w, h);
       }
-      ctx.drawImage(useHold ? p.holdCanvas : p.el, dx, dy, dw, dh);
       if (placeholder && (p.scanning || p.warming)) {
         ctx.fillStyle = "rgba(0,0,0,0.58)";
         rr(ctx, x + 36, y + h / 2 - 44, w - 72, 88, 22);
@@ -827,7 +857,6 @@
         ctx.fillText("画像・動画を追加", x + w / 2, y + h / 2 + 34);
       }
     }
-    ctx.restore();
   }
   function badge(ctx, text, x, y, color, textColor) {
     ctx.font = `900 54px ${FONT}`;
@@ -839,24 +868,62 @@
     ctx.fillText(text, x + w / 2, y + h / 2 + 3);
   }
 
-  // ---------- メイン描画（preview / export 共通） ----------
+  // ---------- 静的オーバーレイキャッシュ＆メイン描画（preview / export 共通） ----------
   const textBoxes = { symptom: null, age: null, clinic: null, sub: null };
+  const overlaySlots = {
+    preview: { key: "", canvas: null, ctx: null },
+    export:  { key: "", canvas: null, ctx: null }
+  };
 
-  function render(c, W, H, opt) {
-    opt = opt || {};
+  function getOverlayCanvas(W, H, opt) {
+    const slot = opt.preview ? overlaySlots.preview : overlaySlots.export;
+    const hasValidLogo = !!(state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0);
+    const key = [
+      W, H,
+      opt.preview ? 1 : 0,
+      opt.guide ? 1 : 0,
+      opt.noWatermark ? 1 : 0,
+      pro ? 1 : 0,
+      fontEpoch,
+      state.theme,
+      state.theme === "custom" ? `${state.custom.bg},${state.custom.text},${state.custom.accent}` : "",
+      hasValidLogo ? (logoUrl || "1") : "0",
+      state.symptom,
+      state.age,
+      state.clinic,
+      state.sub,
+      state.textPos.symptom.dx, state.textPos.symptom.dy,
+      state.textPos.age.dx, state.textPos.age.dy,
+      state.textPos.clinic.dx, state.textPos.clinic.dy,
+      state.textPos.sub.dx, state.textPos.sub.dy
+    ].join("\x1f");
+
+    if (slot.canvas && slot.key === key) {
+      return slot.canvas;
+    }
+
+    if (!slot.canvas) {
+      slot.canvas = document.createElement("canvas");
+      slot.ctx = slot.canvas.getContext("2d");
+    }
+    if (slot.canvas.width !== W || slot.canvas.height !== H) {
+      slot.canvas.width = W;
+      slot.canvas.height = H;
+    }
+
+    const c = slot.ctx;
     const th = theme();
     c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, W, H);
     c.setTransform(W / LW, 0, 0, H / LH, 0, 0);
-    c.clearRect(0, 0, LW, LH);
 
-    // 背景
-    c.fillStyle = th.bg; c.fillRect(0, 0, LW, LH);
+    // 上部帯・下部帯・中央仕切り線のみ不透明背景を描画（左右の映像窓は透過のまま抜く）
+    c.fillStyle = th.bg;
+    c.fillRect(0, 0, LW, PANEL_Y);
+    c.fillRect(0, BOTTOM_Y, LW, LH - BOTTOM_Y);
+    c.fillRect(PANEL_W, PANEL_Y, GAP, PANEL_H);
 
-    // 中央：左右比較（文字を写真上に重ねられるよう先に描画）
-    const B = state.panels.before, A = state.panels.after;
-    drawMedia(c, B, 0, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "BEFORE");
-    drawMedia(c, A, PANEL_W + GAP, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "AFTER");
-    c.fillStyle = th.bg; c.fillRect(PANEL_W, PANEL_Y, GAP, PANEL_H);
     badge(c, "BEFORE", 24, PANEL_Y + 24, "rgba(70,76,88,0.92)", "#fff");
     badge(c, "AFTER", PANEL_W + GAP + 24, PANEL_Y + 24, th.accent, "#fff");
 
@@ -899,7 +966,7 @@
     if (clinic) {
       c.textAlign = "center"; c.textBaseline = "middle";
       let maxW = 960, logoW = 0, logoH = 0;
-      if (state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0) {
+      if (hasValidLogo) {
         logoH = 120; logoW = state.logo.naturalWidth / state.logo.naturalHeight * logoH;
         logoW = Math.min(logoW, 260); maxW = 960 - logoW - 30;
       }
@@ -920,7 +987,7 @@
         const bw = Math.max(240, total + 48);
         textBoxes.clinic = { x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh };
       }
-    } else if (state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0) {
+    } else if (hasValidLogo) {
       const lh = 120, lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 400);
       clinicHalfH = 60;
       c.drawImage(state.logo, cx - lw / 2, cy - lh / 2, lw, lh);
@@ -980,9 +1047,44 @@
       c.restore();
     }
 
-    // 文字ドラッグ中のガイド線（プレビューのみ）
+    // 安全域ガイド（プレビューのみ）
+    if (opt.guide) {
+      c.fillStyle = "rgba(255,0,0,0.18)";
+      c.fillRect(0, 0, LW, 120);
+      c.fillRect(0, 1640, LW, LH - 1640);
+      c.fillRect(960, 1000, 120, 640);
+      c.fillStyle = "#fff"; c.font = `500 28px ${FONT}`; c.textAlign = "center";
+      c.fillText("Instagram UIで隠れやすい範囲（目安）", LW / 2, 1880);
+    }
+
+    c.restore();
+    slot.key = key;
+    return slot.canvas;
+  }
+
+  function render(c, W, H, opt) {
+    opt = opt || {};
+    const th = theme();
+    const ov = getOverlayCanvas(W, H, opt);
+
+    c.save();
+    c.setTransform(W / LW, 0, 0, H / LH, 0, 0);
+
+    // ベース背景（透過PNG素材や境界サブピクセル用）
+    c.fillStyle = th.bg;
+    c.fillRect(0, 0, LW, LH);
+
+    // 中央：左右比較映像／画像
+    drawMedia(c, state.panels.before, 0, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "BEFORE");
+    drawMedia(c, state.panels.after, PANEL_W + GAP, PANEL_Y, PANEL_W, PANEL_H, th, opt.preview, "AFTER");
+
+    // キャッシュ済み文字・バッジ・透かしレイヤーを1回のGPUテクスチャ転送で合成（毎フレームのmeasureText/fillText負荷をゼロ化）
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.drawImage(ov, 0, 0);
+
+    // 文字ドラッグ中のガイド線（ドラッグ中のみ描画）
     if (opt.preview && drag && drag.kind === "text") {
-      c.save();
+      c.setTransform(W / LW, 0, 0, H / LH, 0, 0);
       if (state.textPos[drag.key].dx === 0) {
         c.strokeStyle = "rgba(53,194,138,0.75)";
         c.lineWidth = 3;
@@ -997,17 +1099,6 @@
         rr(c, tb.x, tb.y, tb.w, tb.h, 16);
         c.stroke();
       }
-      c.restore();
-    }
-
-    // 安全域ガイド（プレビューのみ）
-    if (opt.guide) {
-      c.fillStyle = "rgba(255,0,0,0.18)";
-      c.fillRect(0, 0, LW, 120);
-      c.fillRect(0, 1640, LW, LH - 1640);
-      c.fillRect(960, 1000, 120, 640);
-      c.fillStyle = "#fff"; c.font = `500 28px ${FONT}`; c.textAlign = "center";
-      c.fillText("Instagram UIで隠れやすい範囲（目安）", LW / 2, 1880);
     }
     c.restore();
   }
@@ -1030,16 +1121,43 @@
   }
   function tick() {
     if (!state.exporting) {
+      const vids = videos();
       if (state.playing && !scrubbingTrim && !syncingVideos && !loopTimer) {
-        const vids = videos();
         if (vids.length > 0 && !vids.some(p => p.scanning) && vids.every(isVideoAtEnd)) {
           loopTimer = setTimeout(() => {
             loopTimer = null;
             if (state.playing && !state.exporting && !scrubbingTrim) restartVideos();
-          }, 350);
+          }, 180);
         }
       }
-      render(pctx, pv.width, pv.height, { preview: true, guide: state.guide });
+
+      // 変更がないアイドル時や、120Hz画面での30fps動画のフレーム間では再描画を完全にスキップしGPU/CPU負荷をゼロにする
+      let needDraw = previewDirty;
+      for (let i = 0; i < vids.length; i++) {
+        const p = vids[i];
+        const uh = shouldUseHold(p);
+        if (uh !== p.drawnHold) {
+          needDraw = true;
+        } else if (!uh && p.el) {
+          if (p.frameSeq !== p.drawnFrameSeq || Math.abs(p.el.currentTime - p.drawnTime) >= 0.004) {
+            needDraw = true;
+          }
+        }
+      }
+
+      if (needDraw) {
+        render(pctx, pv.width, pv.height, { preview: true, guide: state.guide });
+        previewDirty = false;
+        for (let i = 0; i < vids.length; i++) {
+          const p = vids[i];
+          const uh = shouldUseHold(p);
+          p.drawnHold = uh;
+          if (!uh && p.el) {
+            p.drawnFrameSeq = p.frameSeq;
+            p.drawnTime = p.el.currentTime;
+          }
+        }
+      }
     }
     requestAnimationFrame(tick);
   }
@@ -1047,13 +1165,12 @@
   // ---------- メディア読み込み・デコーダ管理・動き始め同期 ----------
   function setMsg(text, kind) { const m = $("msg"); m.textContent = text || ""; m.className = "msg " + (kind || ""); }
   function videos() { return Object.values(state.panels).filter(p => p.type === "video"); }
-  const nextFrame = () => new Promise((res) => requestAnimationFrame(res));
 
   function captureHoldFrame(p) {
     if (!p || p.type !== "video" || !p.el) return;
     const vw = p.el.videoWidth, vh = p.el.videoHeight;
     if (!vw || !vh || p.el.readyState < 2) return;
-    const scale = Math.min(1, 540 / vw);
+    const scale = Math.min(1, 270 / vw);
     const cw = Math.max(2, Math.round(vw * scale));
     const ch = Math.max(2, Math.round(vh * scale));
     if (!p.holdCanvas) p.holdCanvas = document.createElement("canvas");
@@ -1329,87 +1446,58 @@
   }
 
   /**
-   * 1周目（初回再生）のみ発生するWebKitのAVPlayerItemVideoOutput接続・Metalシェーダ初期化・
-   * デコーダ先読みバッファ空欠によるカクつきを防ぐため、初回は非表示のまま7フレーム以上実再生＋GPU転送を行い、
-   * 2周目以降のループ再生と完全に同じ「温まった状態」を作ってからホットポーズで待機させる
+   * 初回再生時のみ1回だけGPUテクスチャ経路（AVPlayerItemVideoOutput / Metal）を並列ウォームアップする。
+   * 2周目以降のループ再生や微調整時には余計なプリ再生・逆シークを一切行わず即座に並列スタートさせる。
    */
-  async function primeVideoForStart(p, targetSec, isCancelled) {
+  async function quickWarmOnce(p, targetSec, isCancelled) {
     const v = p.el;
-    if (!v) return;
-    v.pause();
-    await waitIdleSeek(v, 450);
-    if (isCancelled && isCancelled()) return;
-
-    if (!p.warmed) {
-      p.warming = true;
-      try {
-        await waitCanPlay(v, 800);
-        if (isCancelled && isCancelled()) return;
-
-        await seekTo(v, targetSec);
-        if (isCancelled && isCancelled()) return;
-        pumpGpuFrame(v);
-        captureHoldFrame(p);
-
-        const dur0 = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
-        const avail = dur0 > 0 ? Math.max(0.06, dur0 - targetSec - 0.05) : 0.3;
-        const warmAdvance = Math.min(0.24, avail * 0.7);
-        const warmRes = await playAndPumpFrames(v, {
-          minFrames: warmAdvance >= 0.18 ? 7 : 3,
-          minAdvance: warmAdvance,
-          timeoutMs: 950,
-          pauseAtEnd: true
-        }, isCancelled);
-        if (isCancelled && isCancelled()) { v.pause(); return; }
-        if (warmRes.frames >= 3 || warmRes.advanced >= 0.1) {
-          p.warmed = true;
-        }
-      } finally {
-        p.warming = false;
-      }
+    if (!v || p.warmed) return;
+    p.warming = true;
+    markDirty();
+    try {
+      await waitCanPlay(v, 450);
+      if (isCancelled && isCancelled()) return;
+      await seekTo(v, targetSec);
+      if (isCancelled && isCancelled()) return;
+      pumpGpuFrame(v);
+      captureHoldFrame(p);
+      await playAndPumpFrames(v, {
+        minFrames: 2,
+        minAdvance: 0.035,
+        timeoutMs: 220,
+        pauseAtEnd: true
+      }, isCancelled);
+      if (isCancelled && isCancelled()) { v.pause(); return; }
+      await seekTo(v, targetSec);
+      p.warmed = true;
+    } finally {
+      p.warming = false;
+      markDirty();
     }
-
-    const dur = isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
-    const lead = targetSec >= 0.11 ? 0.10 : 0;
-    const preSec = clamp(targetSec - lead, 0, dur > 0.15 ? dur - 0.12 : 0);
-
-    await seekTo(v, preSec);
-    if (isCancelled && isCancelled()) { v.pause(); return; }
-    await waitCanPlay(v, 350);
-    if (isCancelled && isCancelled()) { v.pause(); return; }
-
-    const startCt = v.currentTime;
-    const goalAdvance = dur > 0 && (dur - startCt) < 0.12 ? 0.02 : (lead > 0 ? 0.085 : 0.045);
-    await playAndPumpFrames(v, {
-      minFrames: lead > 0 ? 3 : 2,
-      minAdvance: goalAdvance,
-      timeoutMs: 450,
-      pauseAtEnd: true
-    }, isCancelled);
   }
 
   function autoDetectPanel(which) {
     const p = state.panels[which];
-    if (!p || p.type !== "video" || !p.el || !MOTION) return Promise.resolve(0);
+    if (!p || p.type !== "video" || !p.el || !p.url || !MOTION) return Promise.resolve(0);
     const token = ++p.scanId;
     clearLoopTimer();
     syncToken++;
     syncingVideos = false;
-    // スキャン中は全動画を一時停止し、デコーダ帯域をスキャンに集中させる
+    // スキャン中は全動画を一時停止し、再生用<video>はCPU読み出し(getImageData)で汚染せず専用一時デコーダで解析する
     videos().forEach(vp => {
       if (!vp.scanning && vp.el && !vp.el.seeking) captureHoldFrame(vp);
       if (vp.el) vp.el.pause();
     });
     p.scanning = true;
     refreshPick();
+    markDirty();
 
     const job = MOTION.detectStart(
-      p.el,
+      p.url,
       p.el.duration || 0,
       () => !Object.values(state.panels).includes(p) || p.scanId !== token
     ).then((sec) => {
       if (!Object.values(state.panels).includes(p) || p.scanId !== token) return 0;
-      // スキャン終了位置（途中フレーム）が一瞬描画されないよう同期ロックを先に立てる
       syncingVideos = true;
       p.scanning = false;
       p.autoDetected = true;
@@ -1419,6 +1507,7 @@
         p.trimStart = clamped;
       }
       refreshPick();
+      markDirty();
       if (!state.exporting && !scrubbingTrim && !videos().some(vp => vp.scanning)) {
         restartVideos();
       } else if (!videos().some(vp => vp.scanning)) {
@@ -1430,6 +1519,7 @@
         syncingVideos = true;
         p.scanning = false;
         refreshPick();
+        markDirty();
         if (!state.exporting && !scrubbingTrim && !videos().some(vp => vp.scanning)) {
           restartVideos();
         } else if (!videos().some(vp => vp.scanning)) {
@@ -1440,6 +1530,18 @@
     });
     p.scanPromise = job;
     return job;
+  }
+
+  function attachVideoFrameTracker(p, v) {
+    v.addEventListener("seeked", markDirty);
+    if (typeof v.requestVideoFrameCallback === "function") {
+      const step = () => {
+        if (p.el !== v) return;
+        p.frameSeq++;
+        v.requestVideoFrameCallback(step);
+      };
+      v.requestVideoFrameCallback(step);
+    }
   }
 
   function loadFile(which, file) {
@@ -1461,6 +1563,7 @@
         destroyPanelMedia(p);
         Object.assign(p, newPanel());
         refreshPick();
+        markDirty();
       }
     }
 
@@ -1471,15 +1574,18 @@
         type, el, url, name: file.name, zoom: 1, ox: 0, oy: 0,
         trimStart: 0, autoTrimSec: 0, autoDetected: false,
         scanning: false, scanPromise: null, audioSrc: null,
-        holdCanvas: null, hasHold: false, warmed: false, warming: false
+        holdCanvas: null, hasHold: false, warmed: false, warming: false,
+        frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null
       });
       if (type === "video") {
+        attachVideoFrameTracker(p, el);
         pumpGpuFrame(el);
         captureHoldFrame(p);
       }
       $("zoom" + cap(which)).value = 1;
       refreshPick();
       setMsg("");
+      markDirty();
       if (type === "video") {
         if (state.autoSync && MOTION) {
           autoDetectPanel(which);
@@ -1493,6 +1599,9 @@
     if (isVideo) {
       const v = document.createElement("video");
       v.muted = true; v.loop = false; v.playsInline = true; v.preload = "auto";
+      v.width = 2;
+      v.height = 2;
+      v.style.cssText = "width:2px;height:2px;display:block;contain:strict";
       v.setAttribute("playsinline", "");
       v.setAttribute("webkit-playsinline", "");
       mediaPool.appendChild(v);
@@ -1508,6 +1617,7 @@
         try { v.onloadeddata = null; v.removeAttribute("src"); v.load(); v.remove(); } catch (e) {}
         URL.revokeObjectURL(url);
         setMsg("この動画は読み込めませんでした（形式を確認してください）。", "err");
+        markDirty();
         if (videos().length) restartVideos();
       };
       v.src = url;
@@ -1525,6 +1635,7 @@
     state.panels[which] = newPanel();
     refreshPick();
     $("zoom" + cap(which)).value = 1;
+    markDirty();
   }
 
   async function restartVideos() {
@@ -1533,11 +1644,13 @@
     const vids = videos();
     if (!vids.length) {
       syncingVideos = false;
+      markDirty();
       return;
     }
     if (vids.some(p => p.scanning)) {
       vids.forEach(p => { if (p.el) p.el.pause(); });
       syncingVideos = false;
+      markDirty();
       return;
     }
     vids.forEach(p => {
@@ -1550,29 +1663,35 @@
 
     const cancelled = () => myToken !== syncToken || state.exporting || scrubbingTrim;
     const abortCleanly = () => {
-      if (myToken === syncToken) syncingVideos = false;
+      if (myToken === syncToken) {
+        syncingVideos = false;
+        markDirty();
+      }
     };
 
-    for (const p of vids) {
-      if (cancelled()) { abortCleanly(); return; }
-      const start = clamp(p.trimStart || 0, 0, maxTrimFor(p));
-      if (state.playing) {
-        await primeVideoForStart(p, start, cancelled);
+    const starts = vids.map(p => clamp(p.trimStart || 0, 0, maxTrimFor(p)));
+
+    // 初回のみ並列ウォームアップ、2周目以降は並列シークのみで即スタート（1秒フリーズを完全解消）
+    await Promise.all(vids.map(async (p, idx) => {
+      if (cancelled()) return;
+      const start = starts[idx];
+      if (state.playing && !p.warmed) {
+        await quickWarmOnce(p, start, cancelled);
       } else {
         await seekTo(p.el, start);
       }
-      if (cancelled()) { abortCleanly(); return; }
-      captureHoldFrame(p);
-    }
+      if (!cancelled()) captureHoldFrame(p);
+    }));
 
     if (cancelled()) { abortCleanly(); return; }
     if (state.playing) {
       const startCts = vids.map(p => (p.el ? p.el.currentTime : 0));
       await Promise.all(vids.map(p => p.el.play().catch(() => {})));
-      await Promise.all(vids.map((p, idx) => waitLivePlaybackFrame(p.el, startCts[idx], 220, cancelled)));
+      await Promise.all(vids.map((p, idx) => waitLivePlaybackFrame(p.el, startCts[idx], 85, cancelled)));
     }
     if (cancelled()) { abortCleanly(); return; }
     syncingVideos = false;
+    markDirty();
   }
 
   function setPlaying(on) {
@@ -1584,6 +1703,7 @@
       syncToken++;
       syncingVideos = false;
       vids.forEach(p => p.el.pause());
+      markDirty();
       return;
     }
     if (vids.length > 0 && vids.every(isVideoAtEnd)) {
@@ -1591,6 +1711,7 @@
       return;
     }
     vids.forEach(p => p.el.play().catch(() => {}));
+    markDirty();
   }
 
   // ---------- プレビュー操作（ドラッグ/ホイール/ドロップ） ----------
@@ -1632,6 +1753,7 @@
           rawDy: state.textPos[tKey].dy,
           moved: false
         };
+        markDirty();
       } else {
         const which = hitPanel(pt);
         drag = which ? { kind: "panel", which, last: pt } : null;
@@ -1661,6 +1783,7 @@
       drag.last = pt;
       drag.moved = true;
       syncTextSliders();
+      markDirty();
       return;
     }
     const p = state.panels[drag.which];
@@ -1668,12 +1791,15 @@
     if (rx > 0) p.ox = clamp(p.ox + (pt.x - drag.last.x) / rx, -1, 1);
     if (ry > 0) p.oy = clamp(p.oy + (pt.y - drag.last.y) / ry, -1, 1);
     drag.last = pt;
+    markDirty();
   });
   const endPtr = (e) => {
-    if (drag && drag.kind === "text" && drag.moved && pointers.size <= 1) saveSettings();
+    const hadTextDrag = !!(drag && drag.kind === "text");
+    if (hadTextDrag && drag.moved && pointers.size <= 1) saveSettings();
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
     if (!pointers.size) drag = null;
+    if (hadTextDrag) markDirty();
   };
   pv.addEventListener("pointerdown", (e) => {
     const pt = logical(e);
@@ -1705,6 +1831,7 @@
     $("zoom" + cap(which)).value = p.zoom;
     const { rx, ry } = panelRange(p, PANEL_W, PANEL_H);   // ズーム縮小時のはみ出し補正
     if (rx === 0) p.ox = 0; if (ry === 0) p.oy = 0;
+    markDirty();
   }
 
   // ---------- 書き出し ----------
@@ -1810,14 +1937,18 @@
         dur = Math.min(maxSec, state.bgm.photoSec || 8);
       }
 
-      // 録画開始前に各動画を順番にプリロール（デコーダ温め）し、スタート直後のカクつきを防止
+      // 録画開始前に各動画を並列シーク（未ウォームアップの場合のみ初回温め）
       if (vids.length) {
-        setMsg("スタート位置を滑らかに準備しています…");
-        for (const p of vids) {
+        setMsg("スタート位置を準備しています…");
+        await Promise.all(vids.map(async (p) => {
           const ts = clamp(p.trimStart || 0, 0, maxTrimFor(p));
-          await primeVideoForStart(p, ts, () => false);
+          if (!p.warmed) {
+            await quickWarmOnce(p, ts, () => false);
+          } else {
+            await seekTo(p.el, ts);
+          }
           captureHoldFrame(p);
-        }
+        }));
       }
 
       setMsg(`書き出し中…（約${Math.ceil(dur)}秒）このタブを開いたままにしてください。`);
@@ -1847,14 +1978,14 @@
       rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
       const stopped = new Promise((res) => { rec.onstop = res; });
 
+      // 書き出し用オーバーレイキャッシュを事前生成してから録画開始
       render(cctx, w, h, {});
       pctx.drawImage(cv, 0, 0, pv.width, pv.height);
 
-      // プリロール済みのホットポーズ状態から全動画を先に再生開始し、実際に初フレームが流れ出してから録画開始
       if (vids.length) {
         const startCts = vids.map(p => (p.el ? p.el.currentTime : 0));
         await Promise.all(vids.map(p => p.el.play().catch(() => {})));
-        await Promise.all(vids.map((p, idx) => waitLivePlaybackFrame(p.el, startCts[idx], 220, () => false)));
+        await Promise.all(vids.map((p, idx) => waitLivePlaybackFrame(p.el, startCts[idx], 85, () => false)));
         render(cctx, w, h, {});
       }
       if (wantBgm && audioCtx && dest) {
@@ -1864,19 +1995,25 @@
           durationSec: dur
         });
       }
-      rec.start(1000);
+      // 1秒細切れフラッシュ(rec.start(1000))によるMP4エンコーダの周期的スパイクを防ぎ、連続ストリームで記録
+      rec.start();
       const t0 = performance.now();
+      let lastExportDraw = t0 - 40;
       let lastProg = -1;
-      let frameIdx = 0;
+      let exportedFrames = 0;
       await new Promise((resolve) => {
         const loop = () => {
           const now = performance.now();
           const t = (now - t0) / 1000;
-          render(cctx, w, h, {});
-          if ((frameIdx++ & 1) === 0) {
-            pctx.drawImage(cv, 0, 0, pv.width, pv.height);
+          // 120Hz/60Hz端末でも captureStream(30) に合わせた約30fps間隔でのみ合成し、エンコーダのGPU/CPU帯域を確保
+          if (now - lastExportDraw >= 31 || t >= dur) {
+            lastExportDraw = now;
+            render(cctx, w, h, {});
+            if ((exportedFrames++ & 1) === 0) {
+              pctx.drawImage(cv, 0, 0, pv.width, pv.height);
+            }
           }
-          if (now - lastProg >= 100) {
+          if (now - lastProg >= 120) {
             lastProg = now;
             $("progressBar").style.width = Math.min(100, t / dur * 100) + "%";
           }
@@ -1902,6 +2039,7 @@
       if (audioNode) { try { audioNode.disconnect(); } catch (e) {} }
       if (audioEl) audioEl.muted = true;
       state.exporting = false;
+      markDirty();
       $("btnSave").disabled = false; $("btnPng").disabled = false;
       setTimeout(() => { $("progressBox").hidden = true; }, 1200);
       restartVideos();
@@ -1915,6 +2053,7 @@
       $(id).addEventListener("input", (e) => {
         state[key] = e.target.value.trim();
         if (key === "clinic") saveSettings();
+        markDirty();
       }));
 
     document.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => $("file" + cap(b.dataset.pick)).click());
@@ -1941,6 +2080,7 @@
         p.trimStart = clamp(Math.round((parseFloat(e.target.value) || 0) * 10) / 10, 0, maxTrimFor(p));
         try { p.el.currentTime = p.trimStart; } catch (err) {}
         refreshPick();
+        markDirty();
       };
       ["change", "pointerup", "pointercancel", "touchend"].forEach(ev => trimEl.addEventListener(ev, finishScrub));
     });
@@ -2006,6 +2146,7 @@
       ["before", "after"].forEach(w => {
         $("zoom" + cap(w)).value = state.panels[w].zoom;
       });
+      markDirty();
     };
 
     ["cBg", "cText", "cAccent"].forEach(id => $(id).addEventListener("input", (e) => {
@@ -2018,16 +2159,19 @@
       $(b.slider).addEventListener("input", (e) => {
         state.textPos[k].dy = clamp(parseInt(e.target.value, 10) || b.y, 60, LH - 60) - b.y;
         saveSettings();
+        markDirty();
       });
     });
     $("btnCenterTextX").onclick = () => {
       Object.keys(TEXT_BASE).forEach((k) => { state.textPos[k].dx = 0; });
       saveSettings();
+      markDirty();
     };
     $("btnResetTextPos").onclick = () => {
       state.textPos = newTextPos();
       syncTextSliders();
       saveSettings();
+      markDirty();
     };
 
     $("chkBgm").onchange = (e) => {
@@ -2073,6 +2217,7 @@
         state.logo = img;
         $("btnLogoClear").hidden = false;
         setMsg("");
+        markDirty();
       };
       img.onerror = () => {
         URL.revokeObjectURL(nextUrl);
@@ -2086,7 +2231,7 @@
 
     $("btnPlay").onclick = () => setPlaying(!state.playing);
     $("btnRestart").onclick = restartVideos;
-    $("chkGuide").onchange = (e) => { state.guide = e.target.checked; };
+    $("chkGuide").onchange = (e) => { state.guide = e.target.checked; markDirty(); };
     $("btnPng").onclick = savePng;
     $("btnSave").onclick = () => ((videos().length || state.bgm.enabled) ? saveVideo() : savePng());
 
@@ -2136,6 +2281,10 @@
   loadSettings();
   bind();
   initLicense();
-  if (document.fonts && document.fonts.load) { document.fonts.load('900 40px "Noto Sans JP"'); }
+  if (document.fonts) {
+    const bumpFont = () => { fontEpoch++; markDirty(); };
+    if (document.fonts.load) document.fonts.load('900 40px "Noto Sans JP"').then(bumpFont).catch(() => {});
+    if (document.fonts.ready) document.fonts.ready.then(bumpFont).catch(() => {});
+  }
   requestAnimationFrame(tick);
 })();
