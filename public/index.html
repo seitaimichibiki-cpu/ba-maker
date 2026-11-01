@@ -2,11 +2,17 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>BAメーカー｜整体院・治療院向けビフォーアフター動画メーカー（無料から利用可）</title>
-<meta name="description" content="整体院・治療院向け。ビフォーアフターの写真・動画をリール（9:16）・投稿（4:5）・正方形（1:1）にブラウザだけで編集。動き始め自動同期・自動BGM・AI顔ぼかし追従・姿勢基準線・LINE誘導カット対応。">
+<meta name="description" content="整体院・治療院向け。ビフォーアフターの写真・動画をリール（9:16）・投稿（4:5）・正方形（1:1）にかんたん編集。ワンタップ症状入力・動き始め自動同期・自動BGM・AI顔ぼかし追従・LINE誘導カット対応。">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BAメーカー">
+<meta name="format-detection" content="telephone=no">
 <meta property="og:title" content="BAメーカー｜整体院・治療院向けビフォーアフター動画メーカー">
-<meta property="og:description" content="動き始め自動同期・自動BGM・AI顔ぼかし追従・姿勢基準線・LINE誘導カットまでブラウザ完結。登録不要・無料プランからすぐに使えます。">
+<meta property="og:description" content="動き始め自動同期・自動BGM・AI顔ぼかし追従・姿勢基準線・LINE誘導カットまでアプリ感覚でかんたん編集。登録不要・無料プランからすぐに使えます。">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="BAメーカー">
 <meta property="og:url" content="https://seitaimichibiki-cpu.github.io/ba-maker/">
@@ -17,384 +23,600 @@
 <meta name="twitter:title" content="BAメーカー｜整体院・治療院向けビフォーアフター動画メーカー">
 <meta name="twitter:description" content="写真・動画は端末内処理でサーバー送信なし。ビフォーアフター動画を30秒でリール化。">
 <meta name="twitter:image" content="https://seitaimichibiki-cpu.github.io/ba-maker/ogp.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
-<link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="style.css?v=19">
+<link rel="stylesheet" href="style.css?v=20">
 </head>
-<body>
+<body class="editor-app">
 
 <header class="topbar">
-  <div class="brand">🎬 <span id="brandName">BAメーカー</span><small>リール用ビフォーアフター</small></div>
+  <div class="brand">🎬 <span id="brandName">BAメーカー</span><small>ビフォーアフター動画アプリ</small></div>
   <div class="topbar-right">
+    <button type="button" id="btnInstallApp" class="btn small app-install-btn" hidden>📲 アプリ追加</button>
     <a id="btnAdminPage" href="admin.html" class="btn small admin-nav-btn" hidden>🛡 管理画面</a>
     <span id="planBadge" class="badge free">無料プラン</span>
     <button id="btnUpgrade" class="btn primary small">⭐ 有料プラン / キー入力</button>
   </div>
 </header>
 
-<main class="layout">
+<main class="layout app-workspace">
 
-  <!-- プレビュー -->
+  <!-- 上部固定プレビューステージ -->
   <section class="preview-col">
-    <div class="preview-wrap">
-      <canvas id="preview" width="540" height="960" data-aspect="9:16"></canvas>
+    <div class="preview-stage-row">
+      <div class="preview-wrap">
+        <canvas id="preview" width="540" height="960" data-aspect="9:16"></canvas>
+      </div>
     </div>
     <div class="preview-controls">
-      <button id="btnRestart" class="btn small">⏮ 頭出し</button>
-      <button id="btnPlay" class="btn small">⏸ 停止</button>
+      <button type="button" id="btnRestart" class="btn small">⏮ 頭出し</button>
+      <button type="button" id="btnPlay" class="btn small">⏸ 停止</button>
+      <button type="button" id="btnStageExpand" class="btn small mobile-only-btn" aria-pressed="false">🔍 拡大</button>
+      <label class="stage-guide-pill"><input type="checkbox" id="chkGuide"> 安全域</label>
     </div>
-    <p class="hint">空枠タップで写真・動画を選択 ／ 文字や写真はドラッグで位置調整できます。</p>
+    <p class="hint stage-hint">空枠タップで素材選択 ／ 文字をタップで入力・ドラッグで移動</p>
+    <div class="app-status-strip">
+      <div class="progress" id="progressBox" hidden><div id="progressBar"></div></div>
+      <p id="msg" class="msg"></p>
+    </div>
   </section>
 
-  <!-- 操作パネル -->
+  <!-- 下部タブ切り替え式エディタパネル（PCでは右カラム上部タブ） -->
   <section class="controls-col">
 
-    <div class="card">
-      <h2><span class="step">1</span> 写真・動画を選ぶ</h2>
-      <div class="two">
-        <input type="file" accept="image/*,video/*" id="fileBefore" hidden>
-        <input type="file" accept="image/*,video/*" id="fileAfter" hidden>
-        <button class="pick" data-pick="before"><span class="tag before">BEFORE</span><b>左：施術前</b><small id="nameBefore">タップして選ぶ</small></button>
-        <button class="pick" data-pick="after"><span class="tag after">AFTER</span><b>右：施術後</b><small id="nameAfter">タップして選ぶ</small></button>
-      </div>
-    </div>
+    <nav class="app-tabbar" role="tablist" aria-label="編集メニュー">
+      <button type="button" class="app-tab active" role="tab" aria-selected="true" data-tab="media">
+        <span class="app-tab-ico">🎞️<i id="dotTabMedia" class="tab-dot" hidden></i></span>
+        <span class="app-tab-lbl">素材</span>
+      </button>
+      <button type="button" class="app-tab" role="tab" aria-selected="false" data-tab="text">
+        <span class="app-tab-ico">✏️<i id="dotTabText" class="tab-dot" hidden></i></span>
+        <span class="app-tab-lbl">文字・色</span>
+      </button>
+      <button type="button" class="app-tab" role="tab" aria-selected="false" data-tab="fx">
+        <span class="app-tab-ico">😶<i id="dotTabFx" class="tab-dot" hidden></i></span>
+        <span class="app-tab-lbl">ぼかし・線</span>
+      </button>
+      <button type="button" class="app-tab" role="tab" aria-selected="false" data-tab="cta">
+        <span class="app-tab-ico">🎬<i id="dotTabCta" class="tab-dot" hidden></i></span>
+        <span class="app-tab-lbl">CTA・音</span>
+      </button>
+      <button type="button" class="app-tab save-tab" role="tab" aria-selected="false" data-tab="save">
+        <span class="app-tab-ico">💾</span>
+        <span class="app-tab-lbl">保存・投稿</span>
+      </button>
+    </nav>
 
-    <div class="card">
-      <h2><span class="step">2</span> 文字を入れる</h2>
-      <label>症状<input id="inSymptom" type="text" maxlength="30" placeholder="例：腰痛・坐骨神経痛"></label>
-      <label>年齢・属性<input id="inAge" type="text" maxlength="20" placeholder="例：40代 女性"></label>
-      <label>院名（自動保存）<input id="inClinic" type="text" maxlength="30" placeholder="例：整体院 導"></label>
-      <label>補足の一文<input id="inSub" type="text" maxlength="40" placeholder="例：施術3回後の変化"></label>
-    </div>
+    <div class="tab-panels" id="tabPanelsScroller">
 
-    <div class="card adv">
-      <h2>🎨 配色・文字位置・映像と音声の調整</h2>
-
-      <h3>デザイン・配色（自動保存）</h3>
-      <div class="themes" id="themes"></div>
-      <div id="customBox" class="custom-box">
-        <label>背景<input type="color" id="cBg" value="#111111"></label>
-        <label>文字<input type="color" id="cText" value="#ffffff"></label>
-        <label>アクセント<input type="color" id="cAccent" value="#ff5a5f"></label>
-      </div>
-      <div class="logo-row">
-        <button id="btnLogo" class="btn small">🔒 院名横ロゴを追加（有料）</button>
-        <input type="file" accept="image/*" id="fileLogo" hidden>
-        <button id="btnLogoClear" class="btn tiny" hidden>ロゴ削除</button>
-      </div>
-
-      <h3>文字位置の調整（自動保存）</h3>
-      <p class="hint">プレビュー上の文字を直接指やマウスでドラッグしても上下・左右に動かせます。</p>
-      <div class="two">
-        <label class="slider">症状（上下）<input type="range" min="60" max="1860" step="1" value="125" id="posSymptomY"></label>
-        <label class="slider">年齢・属性（上下）<input type="range" min="60" max="1860" step="1" value="250" id="posAgeY"></label>
-        <label class="slider">院名（上下）<input type="range" min="60" max="1860" step="1" value="1590" id="posClinicY"></label>
-        <label class="slider">補足（上下）<input type="range" min="60" max="1860" step="1" value="1700" id="posSubY"></label>
-      </div>
-      <div>
-        <button id="btnCenterTextX" class="btn tiny">左右を中央に揃える</button>
-        <button id="btnResetTextPos" class="btn tiny">初期位置にリセット</button>
-      </div>
-
-      <h3>写真・動画の調整</h3>
-      <label class="check"><input type="checkbox" id="chkAutoSync" checked> 🚶 動画の動き始め（歩き始め）を自動で揃える</label>
-      <p class="hint">ドラッグ＝位置調整 ／ ホイール・ピンチ＝拡大縮小</p>
-      <div class="two">
-        <div class="slot">
-          <h3><span class="tag before">BEFORE</span></h3>
-          <div class="trim-box" id="trimBoxBefore" hidden>
-            <label class="slider">開始位置：<b id="trimValBefore">0.0秒</b><input type="range" min="0" max="10" step="0.1" value="0" id="trimBefore"></label>
-            <div class="trim-btns">
-              <button type="button" class="btn tiny" data-trim="before:-0.1">-0.1秒</button>
-              <button type="button" class="btn tiny" data-trim="before:0.1">+0.1秒</button>
-              <button type="button" class="btn tiny" data-trim="before:0">0秒</button>
+      <!-- ==================== TAB 1: 素材・比率・位置調整 ==================== -->
+      <div class="tab-panel active" id="tabPanelMedia" data-tab-panel="media" role="tabpanel">
+        <div class="card">
+          <div class="card-head-flex">
+            <h2><span class="step">1</span> 写真・動画を選ぶ</h2>
+            <div class="inline-actions">
+              <button type="button" id="btnSwap" class="btn tiny">⇄ 左右入替</button>
+              <button type="button" id="btnResync" class="btn tiny" hidden>🚶 同期し直す</button>
             </div>
           </div>
-          <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomBefore"></label>
-          <button class="btn tiny" data-reset="before">位置リセット</button>
-          <button class="btn tiny" data-clear="before">削除</button>
+          <div class="two">
+            <input type="file" accept="image/*,video/*" id="fileBefore" hidden>
+            <input type="file" accept="image/*,video/*" id="fileAfter" hidden>
+            <button type="button" class="pick" data-pick="before"><span class="tag before">BEFORE</span><b>左：施術前</b><small id="nameBefore">タップして選ぶ</small></button>
+            <button type="button" class="pick" data-pick="after"><span class="tag after">AFTER</span><b>右：施術後</b><small id="nameAfter">タップして選ぶ</small></button>
+          </div>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="chkAutoSync" checked> 🚶 動画の動き始め（歩き始め）を自動で揃える</label>
         </div>
-        <div class="slot">
-          <h3><span class="tag after">AFTER</span></h3>
-          <div class="trim-box" id="trimBoxAfter" hidden>
-            <label class="slider">開始位置：<b id="trimValAfter">0.0秒</b><input type="range" min="0" max="10" step="0.1" value="0" id="trimAfter"></label>
-            <div class="trim-btns">
-              <button type="button" class="btn tiny" data-trim="after:-0.1">-0.1秒</button>
-              <button type="button" class="btn tiny" data-trim="after:0.1">+0.1秒</button>
-              <button type="button" class="btn tiny" data-trim="after:0">0秒</button>
+
+        <div class="card">
+          <h2>📐 画面サイズ・比較レイアウト</h2>
+          <div class="seg-group">
+            <span class="seg-label">サイズ比率</span>
+            <div class="seg-row">
+              <button type="button" class="seg-btn active" data-aspect="9:16">9:16 リール</button>
+              <button type="button" class="seg-btn" data-aspect="4:5">⭐ 4:5 投稿</button>
+              <button type="button" class="seg-btn" data-aspect="1:1">⭐ 1:1 正方形・HP</button>
             </div>
           </div>
-          <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomAfter"></label>
-          <button class="btn tiny" data-reset="after">位置リセット</button>
-          <button class="btn tiny" data-clear="after">削除</button>
+          <div class="seg-group" style="margin-bottom:0">
+            <span class="seg-label">比較レイアウト</span>
+            <div class="seg-row">
+              <button type="button" class="seg-btn active" data-layout="split-h">左右2分割</button>
+              <button type="button" class="seg-btn" data-layout="split-v">⭐ 上下2分割</button>
+              <button type="button" class="seg-btn" data-layout="wipe">⭐ スライド比較</button>
+            </div>
+          </div>
         </div>
-      </div>
-      <div>
-        <button id="btnSwap" class="btn tiny">⇄ 左右を入れ替え</button>
-        <button id="btnResync" class="btn tiny" hidden>🚶 動き始めを自動で揃え直す</button>
-      </div>
 
-      <h3>書き出し・音声設定</h3>
-      <label class="slider">自動BGMの音量<input type="range" min="0.1" max="1" step="0.05" value="0.7" id="bgmVol"></label>
-      <label>写真のみのときの動画秒数（BGMオン時）
-        <select id="selPhotoSec">
-          <option value="5">5秒</option>
-          <option value="8" selected>8秒（おすすめ）</option>
-          <option value="10">10秒</option>
-          <option value="15">15秒</option>
-        </select>
-      </label>
-      <label>画質
-        <select id="selQuality">
-          <option value="720">720×1280（無料）</option>
-          <option value="1080" id="optHQ">1080×1920（有料）</option>
-        </select>
-      </label>
-      <label>元動画の音声（自動BGMと併用も可）
-        <select id="selAudio">
-          <option value="none">なし（ミュート）</option>
-          <option value="before">ビフォー動画の音声</option>
-          <option value="after">アフター動画の音声</option>
-        </select>
-      </label>
-      <button id="btnPng" class="btn small">🖼 画像（PNG）で保存</button>
-      <label class="check" style="margin-top:8px"><input type="checkbox" id="chkGuide"> Instagramで隠れやすい範囲を表示</label>
-      <p class="hint" id="limitHint"></p>
-    </div>
-
-    <div class="card pro-tools-card">
-      <div class="pro-tools-head">
-        <h2><span class="step pro-step">★</span> プロ演出・プライバシー保護</h2>
-        <span id="proToolsBadge" class="try-pill">プレビューでお試しOK</span>
-      </div>
-
-      <!-- ⑥ 出力サイズ（比率） ＆ ④ レイアウト切替 -->
-      <div class="seg-group">
-        <span class="seg-label">サイズ比率</span>
-        <div class="seg-row">
-          <button type="button" class="seg-btn active" data-aspect="9:16">9:16 リール</button>
-          <button type="button" class="seg-btn" data-aspect="4:5">⭐ 4:5 投稿</button>
-          <button type="button" class="seg-btn" data-aspect="1:1">⭐ 1:1 正方形・HP</button>
-        </div>
-      </div>
-      <div class="seg-group">
-        <span class="seg-label">比較レイアウト</span>
-        <div class="seg-row">
-          <button type="button" class="seg-btn active" data-layout="split-h">左右2分割</button>
-          <button type="button" class="seg-btn" data-layout="split-v">⭐ 上下2分割</button>
-          <button type="button" class="seg-btn" data-layout="wipe">⭐ スライド比較</button>
-        </div>
-      </div>
-
-      <!-- ① 顔ぼかし（自動追従＋自動追従できない時の対処法） -->
-      <div class="feat-box">
-        <label class="feat-toggle">
-          <input type="checkbox" id="chkFaceBlur">
-          <span>😶 患者様の顔をぼかす（AI顔＋全身骨格自動追従）</span>
-          <em class="pro-tag">⭐有料</em>
-        </label>
-        <div id="faceBlurBody" class="feat-body" hidden>
-          <p class="hint" style="margin:0 0 8px">正面顔だけでなく<strong>全身立ち姿・横向き歩行・前屈・後ろ姿</strong>もAIが頭の位置を自動追従します。位置を合わせ直したい時はプレビュー上の丸を頭へドラッグするか<strong>「🎯 今の丸の位置から追従」</strong>・<strong>「📌 手動で位置を固定」</strong>を選べます。</p>
+        <div class="card">
+          <h2>🔍 拡大・開始タイミング微調整</h2>
+          <p class="hint" style="margin:0 0 8px">プレビュー画面を直接ドラッグ（移動）・2本指ピンチ（拡大）しても調整できます。</p>
           <div class="two">
             <div class="slot">
-              <label class="check"><input type="checkbox" id="chkBlurBefore" checked> <span class="tag before">BEFORE</span> ぼかし</label>
-              <select id="selBlurModeBefore" class="compact-sel">
-                <option value="auto">🎯 AI自動追従</option>
-                <option value="patch">👣 指定位置から頭を追従</option>
-                <option value="fixed">📌 手動で位置を固定</option>
-              </select>
-              <label class="slider">大きさ<input type="range" min="0.55" max="2.3" step="0.05" value="1" id="blurSizeBefore"></label>
-              <button type="button" id="btnRetrackBefore" class="btn tiny">🎯 今の丸の位置から追従</button>
-              <div id="blurStatusBefore" class="blur-status">待機中</div>
+              <h3><span class="tag before">BEFORE</span></h3>
+              <div class="trim-box" id="trimBoxBefore" hidden>
+                <label class="slider">開始：<b id="trimValBefore">0.0秒</b><input type="range" min="0" max="10" step="0.1" value="0" id="trimBefore"></label>
+                <div class="trim-btns">
+                  <button type="button" class="btn tiny" data-trim="before:-0.1">-0.1秒</button>
+                  <button type="button" class="btn tiny" data-trim="before:0.1">+0.1秒</button>
+                  <button type="button" class="btn tiny" data-trim="before:0">0秒</button>
+                </div>
+              </div>
+              <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomBefore"></label>
+              <button type="button" class="btn tiny" data-reset="before">位置リセット</button>
+              <button type="button" class="btn tiny" data-clear="before">削除</button>
             </div>
             <div class="slot">
-              <label class="check"><input type="checkbox" id="chkBlurAfter" checked> <span class="tag after">AFTER</span> ぼかし</label>
-              <select id="selBlurModeAfter" class="compact-sel">
-                <option value="auto">🎯 AI自動追従</option>
-                <option value="patch">👣 指定位置から頭を追従</option>
-                <option value="fixed">📌 手動で位置を固定</option>
-              </select>
-              <label class="slider">大きさ<input type="range" min="0.55" max="2.3" step="0.05" value="1" id="blurSizeAfter"></label>
-              <button type="button" id="btnRetrackAfter" class="btn tiny">🎯 今の丸の位置から追従</button>
-              <div id="blurStatusAfter" class="blur-status">待機中</div>
+              <h3><span class="tag after">AFTER</span></h3>
+              <div class="trim-box" id="trimBoxAfter" hidden>
+                <label class="slider">開始：<b id="trimValAfter">0.0秒</b><input type="range" min="0" max="10" step="0.1" value="0" id="trimAfter"></label>
+                <div class="trim-btns">
+                  <button type="button" class="btn tiny" data-trim="after:-0.1">-0.1秒</button>
+                  <button type="button" class="btn tiny" data-trim="after:0.1">+0.1秒</button>
+                  <button type="button" class="btn tiny" data-trim="after:0">0秒</button>
+                </div>
+              </div>
+              <label class="slider">拡大<input type="range" min="1" max="3" step="0.01" value="1" id="zoomAfter"></label>
+              <button type="button" class="btn tiny" data-reset="after">位置リセット</button>
+              <button type="button" class="btn tiny" data-clear="after">削除</button>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- ② 姿勢チェック基準線・注目スタンプ（赤丸・矢印） -->
-      <div class="feat-box">
-        <div class="feat-head-static">
-          <span>📏 姿勢チェック基準線・注目スタンプ</span>
-          <em class="pro-tag">⭐有料</em>
-        </div>
-        <div class="posture-checks">
-          <label class="check"><input type="checkbox" id="chkPostureGrid"> 方眼グリッド＋中心線</label>
-          <label class="check"><input type="checkbox" id="chkPostureLines"> 肩・骨盤の高さ比較ライン（上下ドラッグ可）</label>
-        </div>
-        <div class="marker-bar">
-          <button type="button" id="btnAddCircle" class="btn tiny">＋ ⭕ 赤丸を追加</button>
-          <button type="button" id="btnAddArrow" class="btn tiny">＋ ➡ 矢印を追加</button>
-          <button type="button" id="btnRotateMarker" class="btn tiny" hidden>↻ 矢印の向き変更</button>
-          <button type="button" id="btnClearMarkers" class="btn tiny" hidden>🗑 スタンプ全消去</button>
+        <div class="tab-step-nav">
+          <button type="button" class="btn primary block" data-goto-tab="text">次へ：✏️ ワンタップ文字入力・配色 ▶</button>
         </div>
       </div>
 
-      <!-- ③ 動画ラスト2秒の予約・LINE誘導エンドカード（中央ロゴ任意挿入＋画像サイズ指定対応） -->
-      <div class="feat-box">
-        <label class="feat-toggle">
-          <input type="checkbox" id="chkEndCard">
-          <span>🎬 動画ラスト2秒に「予約・LINE誘導カット」を挿入</span>
-          <em class="pro-tag">⭐有料</em>
-        </label>
-        <div id="endCardBody" class="feat-body" hidden>
-          <label>地域・最寄り駅（自動保存）<input id="inEndArea" type="text" maxlength="32" placeholder="例：〇〇市・〇〇駅 徒歩3分"></label>
-          <label>初回オファー・見出し（自動保存）<input id="inEndOffer" type="text" maxlength="42" placeholder="例：通常価格 13,000円 → 初回限定特別価格 1,980円（税込）"></label>
-          <label>誘導アクション文（自動保存）<input id="inEndCta" type="text" maxlength="36" value="ご予約はプロフィールの公式LINEから ▶"></label>
+      <!-- ==================== TAB 2: 文字（ワンタップチップ）・配色・位置 ==================== -->
+      <div class="tab-panel" id="tabPanelText" data-tab-panel="text" role="tabpanel" hidden>
+        <div class="card">
+          <h2><span class="step">2</span> かんたん文字入力（タップで自動入力）</h2>
 
-          <div class="end-logo-box">
-            <div class="end-logo-head">
-              <span>🖼 中央ロゴ・画像（任意・自動保存）</span>
-              <span id="endLogoName" class="end-logo-name">未選択</span>
+          <div class="field-block">
+            <div class="field-label-row">
+              <span>症状・お悩み（複数タップで組み合わせOK）</span>
+              <button type="button" class="chip-clear-btn" data-clear-input="inSymptom">✕ クリア</button>
             </div>
-            <div class="end-logo-actions">
-              <button type="button" id="btnEndLogo" class="btn small">🖼 ロゴ・画像を選択</button>
-              <input type="file" accept="image/*" id="fileEndLogo" hidden>
-              <button type="button" id="btnEndLogoClear" class="btn tiny" hidden>削除</button>
+            <input id="inSymptom" type="text" maxlength="30" placeholder="下のボタンをタップ、または自由入力">
+            <div class="chip-row" id="chipsSymptom">
+              <button type="button" class="q-chip" data-chip-symptom="腰痛">腰痛</button>
+              <button type="button" class="q-chip" data-chip-symptom="慢性腰痛">慢性腰痛</button>
+              <button type="button" class="q-chip" data-chip-symptom="肩こり">肩こり</button>
+              <button type="button" class="q-chip" data-chip-symptom="首こり">首こり</button>
+              <button type="button" class="q-chip" data-chip-symptom="猫背・巻き肩">猫背・巻き肩</button>
+              <button type="button" class="q-chip" data-chip-symptom="反り腰">反り腰</button>
+              <button type="button" class="q-chip" data-chip-symptom="坐骨神経痛">坐骨神経痛</button>
+              <button type="button" class="q-chip" data-chip-symptom="骨盤の歪み">骨盤の歪み</button>
+              <button type="button" class="q-chip" data-chip-symptom="産後骨盤矯正">産後骨盤矯正</button>
+              <button type="button" class="q-chip" data-chip-symptom="膝の痛み">膝の痛み</button>
+              <button type="button" class="q-chip" data-chip-symptom="四十肩・五十肩">四十肩・五十肩</button>
+              <button type="button" class="q-chip" data-chip-symptom="ストレートネック">ストレートネック</button>
+              <button type="button" class="q-chip" data-chip-symptom="股関節痛">股関節痛</button>
+              <button type="button" class="q-chip" data-chip-symptom="頭痛・自律神経">頭痛・自律神経</button>
             </div>
-            <div id="endLogoSizeRow" class="end-logo-size-row">
-              <span class="end-logo-size-label">画像サイズ指定</span>
-              <input type="range" id="inEndLogoSize" min="120" max="560" step="10" value="280" aria-label="ロゴ画像サイズスライダー">
-              <div class="end-logo-num-wrap">
-                <input type="number" id="inEndLogoSizeNum" min="120" max="560" step="10" value="280" aria-label="ロゴ画像サイズ(px)">
-                <span>px</span>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label-row">
+              <span>年代・属性（年代＋性別をタップで自動結合）</span>
+              <button type="button" class="chip-clear-btn" data-clear-input="inAge">✕ クリア</button>
+            </div>
+            <input id="inAge" type="text" maxlength="20" placeholder="例：40代 女性">
+            <div class="chip-row compact-chips" id="chipsAgeDecade">
+              <button type="button" class="q-chip" data-chip-decade="20代">20代</button>
+              <button type="button" class="q-chip" data-chip-decade="30代">30代</button>
+              <button type="button" class="q-chip" data-chip-decade="40代">40代</button>
+              <button type="button" class="q-chip" data-chip-decade="50代">50代</button>
+              <button type="button" class="q-chip" data-chip-decade="60代">60代</button>
+              <button type="button" class="q-chip" data-chip-decade="70代">70代</button>
+              <button type="button" class="q-chip" data-chip-decade="80代">80代</button>
+            </div>
+            <div class="chip-row compact-chips" id="chipsAgeRole">
+              <button type="button" class="q-chip" data-chip-role="女性">女性</button>
+              <button type="button" class="q-chip" data-chip-role="男性">男性</button>
+              <button type="button" class="q-chip" data-chip-role="産後ママ">産後ママ</button>
+              <button type="button" class="q-chip" data-chip-role="デスクワーク">デスクワーク</button>
+              <button type="button" class="q-chip" data-chip-role="立ち仕事">立ち仕事</button>
+              <button type="button" class="q-chip" data-chip-role="学生">学生</button>
+            </div>
+          </div>
+
+          <div class="field-block">
+            <div class="field-label-row">
+              <span>補足の一文（下部テロップ）</span>
+              <button type="button" class="chip-clear-btn" data-clear-input="inSub">✕ クリア</button>
+            </div>
+            <input id="inSub" type="text" maxlength="40" placeholder="例：初回施術後の変化">
+            <div class="chip-row" id="chipsSub">
+              <button type="button" class="q-chip" data-chip-target="inSub" data-chip-val="初回施術後の変化">初回施術後の変化</button>
+              <button type="button" class="q-chip" data-chip-target="inSub" data-chip-val="施術1回での変化">施術1回での変化</button>
+              <button type="button" class="q-chip" data-chip-target="inSub" data-chip-val="施術3回後の変化">施術3回後の変化</button>
+              <button type="button" class="q-chip" data-chip-target="inSub" data-chip-val="施術5回後の変化">施術5回後の変化</button>
+              <button type="button" class="q-chip" data-chip-target="inSub" data-chip-val="可動域が大幅に改善">可動域が大幅に改善</button>
+              <button type="button" class="q-chip" data-chip-target="inSub" data-chip-val="痛みが大幅に軽減">痛みが大幅に軽減</button>
+              <button type="button" class="q-chip" data-chip-target="inSub" data-chip-val="姿勢がスッキリ改善">姿勢がスッキリ改善</button>
+            </div>
+          </div>
+
+          <div class="field-block" style="margin-bottom:0">
+            <div class="field-label-row">
+              <span>院名（次回から自動入力）</span>
+              <button type="button" class="chip-clear-btn" data-clear-input="inClinic">✕ クリア</button>
+            </div>
+            <input id="inClinic" type="text" maxlength="30" placeholder="例：整体院 導">
+          </div>
+        </div>
+
+        <div class="card adv">
+          <h2>🎨 デザイン・配色 ＆ 文字位置（自動保存）</h2>
+
+          <h3>テーマ・自由カラーピッカー</h3>
+          <div class="themes" id="themes"></div>
+          <div id="customBox" class="custom-box">
+            <label>背景<input type="color" id="cBg" value="#111111"></label>
+            <label>文字<input type="color" id="cText" value="#ffffff"></label>
+            <label>アクセント<input type="color" id="cAccent" value="#ff5a5f"></label>
+          </div>
+          <div class="logo-row">
+            <button type="button" id="btnLogo" class="btn small">🔒 院名横ロゴを追加（有料）</button>
+            <input type="file" accept="image/*" id="fileLogo" hidden>
+            <button type="button" id="btnLogoClear" class="btn tiny" hidden>ロゴ削除</button>
+          </div>
+
+          <h3>文字位置の調整（プレビュー上で直接ドラッグも可）</h3>
+          <div class="two">
+            <label class="slider">症状（上下）<input type="range" min="60" max="1860" step="1" value="125" id="posSymptomY"></label>
+            <label class="slider">年齢・属性（上下）<input type="range" min="60" max="1860" step="1" value="250" id="posAgeY"></label>
+            <label class="slider">院名（上下）<input type="range" min="60" max="1860" step="1" value="1590" id="posClinicY"></label>
+            <label class="slider">補足（上下）<input type="range" min="60" max="1860" step="1" value="1700" id="posSubY"></label>
+          </div>
+          <div>
+            <button type="button" id="btnCenterTextX" class="btn tiny">左右を中央に揃える</button>
+            <button type="button" id="btnResetTextPos" class="btn tiny">初期位置にリセット</button>
+          </div>
+
+          <div class="preset-box">
+            <div class="preset-head">📋 症状別テンプレート（現在の文字・配色・演出を保存） <em class="pro-tag">⭐有料</em></div>
+            <div class="preset-save-row">
+              <input id="inPresetName" type="text" maxlength="20" placeholder="例：腰痛用テンプレ">
+              <button type="button" id="btnSavePreset" class="btn small">💾 保存</button>
+            </div>
+            <div id="presetList" class="preset-list"></div>
+          </div>
+        </div>
+
+        <div class="tab-step-duo">
+          <button type="button" class="btn" data-goto-tab="fx">😶 顔ぼかし・基準線へ ▶</button>
+          <button type="button" class="btn primary" data-goto-tab="save">💾 すぐ保存・投稿へ ▶</button>
+        </div>
+      </div>
+
+      <!-- ==================== TAB 3: 顔ぼかし・姿勢基準線・スタンプ・免責 ==================== -->
+      <div class="tab-panel" id="tabPanelFx" data-tab-panel="fx" role="tabpanel" hidden>
+        <div class="card pro-tools-card">
+          <div class="pro-tools-head">
+            <h2><span class="step pro-step">★</span> 顔ぼかし・姿勢チェック演出</h2>
+            <span id="proToolsBadge" class="try-pill">プレビューでお試しOK</span>
+          </div>
+
+          <!-- ① 顔ぼかし（自動追従＋自動追従できない時の対処法） -->
+          <div class="feat-box" style="margin-top:0">
+            <label class="feat-toggle">
+              <input type="checkbox" id="chkFaceBlur">
+              <span>😶 患者様の顔をぼかす（AI顔＋全身骨格自動追従）</span>
+              <em class="pro-tag">⭐有料</em>
+            </label>
+            <div id="faceBlurBody" class="feat-body" hidden>
+              <p class="hint" style="margin:0 0 8px">正面顔だけでなく<strong>全身立ち姿・横向き歩行・前屈・後ろ姿</strong>もAIが頭の位置を自動追従します。位置を合わせ直したい時はプレビュー上の丸を頭へドラッグして離すか<strong>「🎯 今の丸の位置から追従」</strong>・<strong>「📌 手動で位置を固定」</strong>を選べます。</p>
+              <div class="two">
+                <div class="slot">
+                  <label class="check"><input type="checkbox" id="chkBlurBefore" checked> <span class="tag before">BEFORE</span> ぼかし</label>
+                  <select id="selBlurModeBefore" class="compact-sel">
+                    <option value="auto">🎯 AI自動追従</option>
+                    <option value="patch">👣 指定位置から頭を追従</option>
+                    <option value="fixed">📌 手動で位置を固定</option>
+                  </select>
+                  <label class="slider">大きさ<input type="range" min="0.55" max="2.3" step="0.05" value="1" id="blurSizeBefore"></label>
+                  <button type="button" id="btnRetrackBefore" class="btn tiny">🎯 今の丸の位置から追従</button>
+                  <div id="blurStatusBefore" class="blur-status">待機中</div>
+                </div>
+                <div class="slot">
+                  <label class="check"><input type="checkbox" id="chkBlurAfter" checked> <span class="tag after">AFTER</span> ぼかし</label>
+                  <select id="selBlurModeAfter" class="compact-sel">
+                    <option value="auto">🎯 AI自動追従</option>
+                    <option value="patch">👣 指定位置から頭を追従</option>
+                    <option value="fixed">📌 手動で位置を固定</option>
+                  </select>
+                  <label class="slider">大きさ<input type="range" min="0.55" max="2.3" step="0.05" value="1" id="blurSizeAfter"></label>
+                  <button type="button" id="btnRetrackAfter" class="btn tiny">🎯 今の丸の位置から追従</button>
+                  <div id="blurStatusAfter" class="blur-status">待機中</div>
+                </div>
               </div>
             </div>
           </div>
 
-          <button type="button" id="btnPreviewEndCard" class="btn tiny">👁 プレビューで誘導カットを確認</button>
-        </div>
-      </div>
-
-      <!-- ⑤ 免責ミニテロップ ＆ 症状別テンプレート保存 -->
-      <div class="feat-box">
-        <label class="feat-toggle">
-          <input type="checkbox" id="chkDisclaimer">
-          <span>※ 免責ミニテロップを表示（「個人差があります」等）</span>
-          <em class="pro-tag">⭐有料</em>
-        </label>
-        <div id="disclaimerBody" class="feat-body" hidden>
-          <input id="inDisclaimer" type="text" maxlength="45" value="※施術効果には個人差があります">
-        </div>
-        <div class="preset-box">
-          <div class="preset-head">📋 症状別テンプレート（現在の文字・配色・演出を保存） <em class="pro-tag">⭐有料</em></div>
-          <div class="preset-save-row">
-            <input id="inPresetName" type="text" maxlength="20" placeholder="例：腰痛用テンプレ">
-            <button type="button" id="btnSavePreset" class="btn small">💾 保存</button>
-          </div>
-          <div id="presetList" class="preset-list"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="step">3</span> 保存・SNS投稿する</h2>
-      <div class="bgm-box">
-        <div class="bgm-row">
-          <label class="bgm-check"><input type="checkbox" id="chkBgm" checked> 🎵 自動BGM（アップテンポ）</label>
-          <div class="bgm-actions">
-            <button type="button" id="btnBgmPreview" class="btn tiny">🎧 試聴</button>
-            <button type="button" id="btnBgmNext" class="btn tiny">🎲 曲変更</button>
-          </div>
-        </div>
-        <div id="bgmTitle" class="bgm-title">爽やかポップ #1（126 BPM）</div>
-      </div>
-      <div id="planBar" class="plan-bar free">
-        <span id="planBarText">無料プラン：720p画質・院名下に透かしが入ります</span>
-        <button type="button" id="btnPlanBarUpgrade" class="btn tiny">⭐ 透かしを消す</button>
-      </div>
-      <div id="proTrialBar" class="trial-bar" hidden>
-        <div id="proTrialText" class="trial-bar-text">⭐ 有料機能をお試し中です</div>
-        <div class="trial-bar-actions">
-          <button type="button" id="btnTrialUpgrade" class="btn tiny trial-upg">⭐ 有料プランでこのまま保存</button>
-          <button type="button" id="btnTrialReset" class="btn tiny">有料機能をオフに戻す</button>
-        </div>
-      </div>
-      <button id="btnSave" class="btn primary big">💾 動画で保存する（🎵BGM付き）</button>
-      <div class="progress" id="progressBox" hidden><div id="progressBar"></div></div>
-      <p id="msg" class="msg"></p>
-      <p class="hint">BGMオンまたは動画がある場合は動画（MP4）、写真のみでBGMオフなら画像（PNG）で保存されます。</p>
-
-      <div class="sns-box" id="snsBox">
-        <div class="sns-head">
-          <h3>📲 そのまま各種SNSへ投稿</h3>
-          <span id="snsReadyBadge" class="sns-badge">自動書き出し＋投稿文コピー</span>
-        </div>
-
-        <button type="button" id="btnNativeShare" class="btn sns-native-btn" hidden>📲 スマホアプリ／共有メニューへ直接送る</button>
-
-        <div class="sns-grid">
-          <button type="button" class="sns-btn yt" data-sns="youtube">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12a31.4 31.4 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1c.5-1.9.5-5.8.5-5.8s0-3.9-.5-5.8zM9.6 15.6V8.4l6.3 3.6-6.3 3.6z"/></svg>
-            <span>YouTube</span>
-          </button>
-          <button type="button" class="sns-btn ig" data-sns="instagram">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.2c3.2 0 3.6 0 4.9.1 1.2.1 1.8.2 2.2.4.6.2 1 .5 1.4.9.4.4.7.8.9 1.4.2.4.4 1.1.4 2.2.1 1.3.1 1.6.1 4.8s0 3.6-.1 4.9c-.1 1.2-.2 1.8-.4 2.2-.2.6-.5 1-.9 1.4-.4.4-.8.7-1.4.9-.4.2-1.1.4-2.2.4-1.3.1-1.6.1-4.9.1s-3.6 0-4.9-.1c-1.2-.1-1.8-.2-2.2-.4a3.9 3.9 0 0 1-2.3-2.3c-.2-.4-.4-1.1-.4-2.2-.1-1.3-.1-1.6-.1-4.9s0-3.6.1-4.9c.1-1.2.2-1.8.4-2.2.2-.6.5-1 .9-1.4.4-.4.8-.7 1.4-.9.4-.2 1.1-.4 2.2-.4 1.3-.1 1.6-.1 4.9-.1zM12 0C8.7 0 8.3 0 7.1.1 5.8.1 4.9.3 4.1.6c-.8.3-1.5.7-2.2 1.4A6 6 0 0 0 .6 4.1C.3 4.9.1 5.8.1 7.1 0 8.3 0 8.7 0 12s0 3.7.1 4.9c.1 1.3.2 2.2.6 2.9.3.8.7 1.5 1.4 2.2.7.7 1.3 1.1 2.2 1.4.8.3 1.6.5 2.9.6 1.2.1 1.6.1 4.8.1s3.7 0 4.9-.1c1.3-.1 2.2-.2 2.9-.6.8-.3 1.5-.7 2.2-1.4.7-.7 1.1-1.3 1.4-2.2.3-.8.5-1.6.6-2.9.1-1.2.1-1.6.1-4.9s0-3.7-.1-4.9c-.1-1.3-.2-2.2-.6-2.9-.3-.8-.7-1.5-1.4-2.2A6 6 0 0 0 19.9.6C19.1.3 18.2.1 16.9.1 15.7 0 15.3 0 12 0zm0 5.8a6.2 6.2 0 1 0 0 12.4 6.2 6.2 0 0 0 0-12.4zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.4-11.8a1.4 1.4 0 1 0 0 2.9 1.4 1.4 0 0 0 0-2.9z"/></svg>
-            <span>Instagram</span>
-          </button>
-          <button type="button" class="sns-btn fb" data-sns="facebook">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M24 12.1C24 5.4 18.6 0 12 0S0 5.4 0 12.1C0 18.1 4.4 23.1 10.1 24v-8.4H7.1v-3.5h3V9.4c0-3 1.8-4.7 4.5-4.7 1.3 0 2.7.2 2.7.2v3h-1.5c-1.5 0-2 .9-2 1.9v2.3h3.3l-.5 3.5h-2.8V24C19.6 23.1 24 18.1 24 12.1z"/></svg>
-            <span>Facebook</span>
-          </button>
-          <button type="button" class="sns-btn x" data-sns="x">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
-            <span>X</span>
-          </button>
-          <button type="button" class="sns-btn th" data-sns="threads">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.186 24h-.007c-3.581-.024-6.334-1.205-8.184-3.509C2.35 18.44 1.5 15.586 1.472 12.01v-.017c.03-3.579.879-6.43 2.525-8.482C5.845 1.205 8.6.024 12.18 0h.014c2.746.02 5.043.725 6.826 2.098 1.677 1.29 2.858 3.13 3.509 5.467l-2.04.569c-1.104-3.96-3.898-5.984-8.304-6.015-2.91.022-5.11.936-6.54 2.717C4.307 6.504 3.616 8.914 3.589 12c.027 3.086.718 5.496 2.057 7.164 1.43 1.783 3.631 2.698 6.54 2.717 2.623-.02 4.358-.631 5.8-2.045 1.647-1.613 1.618-3.593 1.09-4.798-.31-.71-.873-1.3-1.634-1.75-.192 1.352-.622 2.446-1.284 3.272-.886 1.102-2.14 1.704-3.73 1.79-1.202.065-2.361-.218-3.259-.801-1.063-.689-1.685-1.74-1.752-2.964-.065-1.19.408-2.285 1.33-3.082.88-.76 2.119-1.207 3.583-1.291a13.853 13.853 0 0 1 3.02.142c-.126-.742-.375-1.332-.75-1.757-.513-.586-1.308-.883-2.359-.89h-.029c-.844 0-1.992.232-2.721 1.32L5.734 7.847c.98-1.454 2.568-2.256 4.478-2.256h.044c3.194.02 5.097 1.975 5.287 5.388.108.046.216.094.321.142 1.49.7 2.58 1.761 3.154 3.07.797 1.82.871 4.79-1.548 7.158-1.85 1.81-4.094 2.628-7.277 2.65Zm1.003-11.69c-.242 0-.487.007-.739.021-1.836.103-2.98.946-2.916 2.143.067 1.256 1.452 1.839 2.784 1.767 1.224-.065 2.818-.543 3.086-3.71a10.5 10.5 0 0 0-2.215-.221Z"/></svg>
-            <span>Threads</span>
-          </button>
-        </div>
-
-        <details class="sns-caption-details" open>
-          <summary>📝 投稿文・ハッシュタグを確認／編集（押下時に自動コピー）</summary>
-          <div class="sns-caption-body">
-            <textarea id="snsCaption" rows="5" maxlength="1000" placeholder="症状や院名を入力すると投稿文とハッシュタグが自動作成されます"></textarea>
-            <div class="sns-caption-actions">
-              <button type="button" id="btnCopyCaption" class="btn tiny">📋 投稿文だけコピー</button>
-              <button type="button" id="btnResetCaption" class="btn tiny">🔄 自動生成に戻す</button>
+          <!-- ② 姿勢チェック基準線・注目スタンプ（赤丸・矢印） -->
+          <div class="feat-box">
+            <div class="feat-head-static">
+              <span>📏 姿勢チェック基準線・注目スタンプ</span>
+              <em class="pro-tag">⭐有料</em>
             </div>
-            <label class="sns-footer-label">📌 院の固定フッター（予約LINE・住所・営業時間など自動追加 <em class="pro-tag">⭐有料</em>）
-              <textarea id="inSnsFooter" rows="3" maxlength="400" placeholder="例：ご予約はプロフィールの公式LINEから24時間受付中✨&#10;〇〇駅徒歩3分／営業時間 9:00〜20:00"></textarea>
-            </label>
+            <div class="posture-checks">
+              <label class="check"><input type="checkbox" id="chkPostureGrid"> 方眼グリッド＋中心線</label>
+              <label class="check"><input type="checkbox" id="chkPostureLines"> 肩・骨盤の高さ比較ライン（上下ドラッグ可）</label>
+            </div>
+            <div class="marker-bar">
+              <button type="button" id="btnAddCircle" class="btn tiny">＋ ⭕ 赤丸を追加</button>
+              <button type="button" id="btnAddArrow" class="btn tiny">＋ ➡ 矢印を追加</button>
+              <button type="button" id="btnRotateMarker" class="btn tiny" hidden>↻ 矢印の向き変更</button>
+              <button type="button" id="btnClearMarkers" class="btn tiny" hidden>🗑 スタンプ全消去</button>
+            </div>
           </div>
-        </details>
-        <p id="snsHint" class="hint sns-hint"></p>
+
+          <!-- ⑤ 免責ミニテロップ -->
+          <div class="feat-box">
+            <label class="feat-toggle">
+              <input type="checkbox" id="chkDisclaimer">
+              <span>※ 免責ミニテロップを表示（「個人差があります」等）</span>
+              <em class="pro-tag">⭐有料</em>
+            </label>
+            <div id="disclaimerBody" class="feat-body" hidden>
+              <input id="inDisclaimer" type="text" maxlength="45" value="※施術効果には個人差があります">
+              <div class="chip-row" style="margin-top:6px">
+                <button type="button" class="q-chip" data-chip-target="inDisclaimer" data-chip-val="※施術効果には個人差があります">※施術効果には個人差があります</button>
+                <button type="button" class="q-chip" data-chip-target="inDisclaimer" data-chip-val="※個人の感想であり効果を保証するものではありません">※個人の感想であり効果を保証するものではありません</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-step-duo">
+          <button type="button" class="btn" data-goto-tab="cta">🎬 ラスト誘導・BGMへ ▶</button>
+          <button type="button" class="btn primary" data-goto-tab="save">💾 保存・投稿へ ▶</button>
+        </div>
       </div>
+
+      <!-- ==================== TAB 4: ラスト2秒CTA（中央ロゴpx指定） ＆ BGM・音声 ==================== -->
+      <div class="tab-panel" id="tabPanelCta" data-tab-panel="cta" role="tabpanel" hidden>
+        <div class="card pro-tools-card">
+          <div class="feat-box" style="margin-top:0">
+            <label class="feat-toggle">
+              <input type="checkbox" id="chkEndCard">
+              <span>🎬 動画ラスト2秒に「予約・LINE誘導カット」を挿入</span>
+              <em class="pro-tag">⭐有料</em>
+            </label>
+            <div id="endCardBody" class="feat-body" hidden>
+              <label>地域・最寄り駅（自動保存）<input id="inEndArea" type="text" maxlength="32" placeholder="例：〇〇市・〇〇駅 徒歩3分"></label>
+
+              <div class="field-block">
+                <div class="field-label-row">
+                  <span>初回オファー・見出し（自動保存）</span>
+                  <button type="button" class="chip-clear-btn" data-clear-input="inEndOffer">✕ クリア</button>
+                </div>
+                <input id="inEndOffer" type="text" maxlength="42" placeholder="例：通常価格 13,000円 → 初回限定特別価格 1,980円（税込）">
+                <div class="chip-row" id="chipsEndOffer">
+                  <button type="button" class="q-chip" data-chip-target="inEndOffer" data-chip-val="通常価格 13,000円 → 初回限定特別価格 1,980円（税込）">通常13,000円 → 初回1,980円（税込）</button>
+                  <button type="button" class="q-chip" data-chip-target="inEndOffer" data-chip-val="LINE予約限定 初回特別価格 1,980円（税込）">LINE限定 初回1,980円（税込）</button>
+                  <button type="button" class="q-chip" data-chip-target="inEndOffer" data-chip-val="初回カウンセリング＋全身整体 1,980円（税込）">初回全身整体 1,980円（税込）</button>
+                </div>
+              </div>
+
+              <div class="field-block">
+                <div class="field-label-row">
+                  <span>誘導アクション文（自動保存）</span>
+                </div>
+                <input id="inEndCta" type="text" maxlength="36" value="ご予約はプロフィールの公式LINEから ▶">
+                <div class="chip-row" id="chipsEndCta">
+                  <button type="button" class="q-chip" data-chip-target="inEndCta" data-chip-val="ご予約はプロフィールの公式LINEから ▶">公式LINEから ▶</button>
+                  <button type="button" class="q-chip" data-chip-target="inEndCta" data-chip-val="24時間WEB・公式LINE予約受付中 ▶">24時間LINE・WEB予約 ▶</button>
+                </div>
+              </div>
+
+              <div class="end-logo-box">
+                <div class="end-logo-head">
+                  <span>🖼 中央ロゴ・画像（任意・自動保存）</span>
+                  <span id="endLogoName" class="end-logo-name">未選択</span>
+                </div>
+                <div class="end-logo-actions">
+                  <button type="button" id="btnEndLogo" class="btn small">🖼 ロゴ・画像を選択</button>
+                  <input type="file" accept="image/*" id="fileEndLogo" hidden>
+                  <button type="button" id="btnEndLogoClear" class="btn tiny" hidden>削除</button>
+                </div>
+                <div id="endLogoSizeRow" class="end-logo-size-row">
+                  <span class="end-logo-size-label">画像サイズ指定</span>
+                  <input type="range" id="inEndLogoSize" min="120" max="560" step="10" value="280" aria-label="ロゴ画像サイズスライダー">
+                  <div class="end-logo-num-wrap">
+                    <input type="number" id="inEndLogoSizeNum" min="120" max="560" step="10" value="280" aria-label="ロゴ画像サイズ(px)">
+                    <span>px</span>
+                  </div>
+                </div>
+              </div>
+
+              <button type="button" id="btnPreviewEndCard" class="btn tiny">👁 プレビューで誘導カットを確認</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🎵 自動BGM・音声設定</h2>
+          <div class="bgm-box">
+            <div class="bgm-row">
+              <label class="bgm-check"><input type="checkbox" id="chkBgm" checked> 🎵 自動BGM（アップテンポ）</label>
+              <div class="bgm-actions">
+                <button type="button" id="btnBgmPreview" class="btn tiny">🎧 試聴</button>
+                <button type="button" id="btnBgmNext" class="btn tiny">🎲 曲変更</button>
+              </div>
+            </div>
+            <div id="bgmTitle" class="bgm-title">爽やかポップ #1（126 BPM）</div>
+          </div>
+          <label class="slider">自動BGMの音量<input type="range" min="0.1" max="1" step="0.05" value="0.7" id="bgmVol"></label>
+          <label>写真のみのときの動画秒数（BGMオン時）
+            <select id="selPhotoSec">
+              <option value="5">5秒</option>
+              <option value="8" selected>8秒（おすすめ）</option>
+              <option value="10">10秒</option>
+              <option value="15">15秒</option>
+            </select>
+          </label>
+          <label style="margin-bottom:0">元動画の音声（自動BGMと併用も可）
+            <select id="selAudio">
+              <option value="none">なし（ミュート）</option>
+              <option value="before">ビフォー動画の音声</option>
+              <option value="after">アフター動画の音声</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="tab-step-nav">
+          <button type="button" class="btn primary block" data-goto-tab="save">次へ：💾 保存・SNS投稿へ進む ▶</button>
+        </div>
+      </div>
+
+      <!-- ==================== TAB 5: 保存・5大SNS投稿・サポート ==================== -->
+      <div class="tab-panel" id="tabPanelSave" data-tab-panel="save" role="tabpanel" hidden>
+        <div class="card">
+          <h2><span class="step">3</span> 保存・SNS投稿する</h2>
+
+          <div id="planBar" class="plan-bar free">
+            <span id="planBarText">無料プラン：720p画質・院名下に透かしが入ります</span>
+            <button type="button" id="btnPlanBarUpgrade" class="btn tiny">⭐ 透かしを消す</button>
+          </div>
+          <div id="proTrialBar" class="trial-bar" hidden>
+            <div id="proTrialText" class="trial-bar-text">⭐ 有料機能をお試し中です</div>
+            <div class="trial-bar-actions">
+              <button type="button" id="btnTrialUpgrade" class="btn tiny trial-upg">⭐ 有料プランでこのまま保存</button>
+              <button type="button" id="btnTrialReset" class="btn tiny">有料機能をオフに戻す</button>
+            </div>
+          </div>
+
+          <div class="save-quick-bar">
+            <label class="save-quality-lbl">画質
+              <select id="selQuality">
+                <option value="720">720×1280（無料）</option>
+                <option value="1080" id="optHQ">1080×1920（有料）</option>
+              </select>
+            </label>
+            <button type="button" id="btnJumpBgmSetting" class="btn small save-bgm-pill" data-goto-tab="cta">🎵 BGM・誘導カット調整</button>
+          </div>
+
+          <button type="button" id="btnSave" class="btn primary big">💾 動画で保存する（🎵BGM付き）</button>
+          <button type="button" id="btnPng" class="btn small block" style="width:100%;margin-top:8px">🖼 静止画（PNG）で保存する</button>
+          <p class="hint" id="limitHint"></p>
+
+          <div class="sns-box" id="snsBox">
+            <div class="sns-head">
+              <h3>📲 そのまま各種SNSへ投稿</h3>
+              <span id="snsReadyBadge" class="sns-badge">自動書き出し＋投稿文コピー</span>
+            </div>
+
+            <button type="button" id="btnNativeShare" class="btn sns-native-btn" hidden>📲 スマホアプリ／共有メニューへ直接送る</button>
+
+            <div class="sns-grid">
+              <button type="button" class="sns-btn yt" data-sns="youtube">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12a31.4 31.4 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1c.5-1.9.5-5.8.5-5.8s0-3.9-.5-5.8zM9.6 15.6V8.4l6.3 3.6-6.3 3.6z"/></svg>
+                <span>YouTube</span>
+              </button>
+              <button type="button" class="sns-btn ig" data-sns="instagram">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.2c3.2 0 3.6 0 4.9.1 1.2.1 1.8.2 2.2.4.6.2 1 .5 1.4.9.4.4.7.8.9 1.4.2.4.4 1.1.4 2.2.1 1.3.1 1.6.1 4.8s0 3.6-.1 4.9c-.1 1.2-.2 1.8-.4 2.2-.2.6-.5 1-.9 1.4-.4.4-.8.7-1.4.9-.4.2-1.1.4-2.2.4-1.3.1-1.6.1-4.9.1s-3.6 0-4.9-.1c-1.2-.1-1.8-.2-2.2-.4a3.9 3.9 0 0 1-2.3-2.3c-.2-.4-.4-1.1-.4-2.2-.1-1.3-.1-1.6-.1-4.9s0-3.6.1-4.9c.1-1.2.2-1.8.4-2.2.2-.6.5-1 .9-1.4.4-.4.8-.7 1.4-.9.4-.2 1.1-.4 2.2-.4 1.3-.1 1.6-.1 4.9-.1zM12 0C8.7 0 8.3 0 7.1.1 5.8.1 4.9.3 4.1.6c-.8.3-1.5.7-2.2 1.4A6 6 0 0 0 .6 4.1C.3 4.9.1 5.8.1 7.1 0 8.3 0 8.7 0 12s0 3.7.1 4.9c.1 1.3.2 2.2.6 2.9.3.8.7 1.5 1.4 2.2.7.7 1.3 1.1 2.2 1.4.8.3 1.6.5 2.9.6 1.2.1 1.6.1 4.8.1s3.7 0 4.9-.1c1.3-.1 2.2-.2 2.9-.6.8-.3 1.5-.7 2.2-1.4.7-.7 1.1-1.3 1.4-2.2.3-.8.5-1.6.6-2.9.1-1.2.1-1.6.1-4.9s0-3.7-.1-4.9c-.1-1.3-.2-2.2-.6-2.9-.3-.8-.7-1.5-1.4-2.2A6 6 0 0 0 19.9.6C19.1.3 18.2.1 16.9.1 15.7 0 15.3 0 12 0zm0 5.8a6.2 6.2 0 1 0 0 12.4 6.2 6.2 0 0 0 0-12.4zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.4-11.8a1.4 1.4 0 1 0 0 2.9 1.4 1.4 0 0 0 0-2.9z"/></svg>
+                <span>Instagram</span>
+              </button>
+              <button type="button" class="sns-btn fb" data-sns="facebook">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M24 12.1C24 5.4 18.6 0 12 0S0 5.4 0 12.1C0 18.1 4.4 23.1 10.1 24v-8.4H7.1v-3.5h3V9.4c0-3 1.8-4.7 4.5-4.7 1.3 0 2.7.2 2.7.2v3h-1.5c-1.5 0-2 .9-2 1.9v2.3h3.3l-.5 3.5h-2.8V24C19.6 23.1 24 18.1 24 12.1z"/></svg>
+                <span>Facebook</span>
+              </button>
+              <button type="button" class="sns-btn x" data-sns="x">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                <span>X</span>
+              </button>
+              <button type="button" class="sns-btn th" data-sns="threads">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.186 24h-.007c-3.581-.024-6.334-1.205-8.184-3.509C2.35 18.44 1.5 15.586 1.472 12.01v-.017c.03-3.579.879-6.43 2.525-8.482C5.845 1.205 8.6.024 12.18 0h.014c2.746.02 5.043.725 6.826 2.098 1.677 1.29 2.858 3.13 3.509 5.467l-2.04.569c-1.104-3.96-3.898-5.984-8.304-6.015-2.91.022-5.11.936-6.54 2.717C4.307 6.504 3.616 8.914 3.589 12c.027 3.086.718 5.496 2.057 7.164 1.43 1.783 3.631 2.698 6.54 2.717 2.623-.02 4.358-.631 5.8-2.045 1.647-1.613 1.618-3.593 1.09-4.798-.31-.71-.873-1.3-1.634-1.75-.192 1.352-.622 2.446-1.284 3.272-.886 1.102-2.14 1.704-3.73 1.79-1.202.065-2.361-.218-3.259-.801-1.063-.689-1.685-1.74-1.752-2.964-.065-1.19.408-2.285 1.33-3.082.88-.76 2.119-1.207 3.583-1.291a13.853 13.853 0 0 1 3.02.142c-.126-.742-.375-1.332-.75-1.757-.513-.586-1.308-.883-2.359-.89h-.029c-.844 0-1.992.232-2.721 1.32L5.734 7.847c.98-1.454 2.568-2.256 4.478-2.256h.044c3.194.02 5.097 1.975 5.287 5.388.108.046.216.094.321.142 1.49.7 2.58 1.761 3.154 3.07.797 1.82.871 4.79-1.548 7.158-1.85 1.81-4.094 2.628-7.277 2.65Zm1.003-11.69c-.242 0-.487.007-.739.021-1.836.103-2.98.946-2.916 2.143.067 1.256 1.452 1.839 2.784 1.767 1.224-.065 2.818-.543 3.086-3.71a10.5 10.5 0 0 0-2.215-.221Z"/></svg>
+                <span>Threads</span>
+              </button>
+            </div>
+
+            <div class="sns-caption-card">
+              <div class="sns-caption-title">📝 投稿文・ハッシュタグ（SNS押下時に自動コピー）</div>
+              <div class="sns-caption-body">
+                <textarea id="snsCaption" rows="4" maxlength="1000" placeholder="症状や院名を入力すると投稿文とハッシュタグが自動作成されます"></textarea>
+                <div class="sns-caption-actions">
+                  <button type="button" id="btnCopyCaption" class="btn tiny">📋 投稿文だけコピー</button>
+                  <button type="button" id="btnResetCaption" class="btn tiny">🔄 自動生成に戻す</button>
+                </div>
+                <label class="sns-footer-label">📌 院の固定フッター（予約LINE・住所・営業時間など自動追加 <em class="pro-tag">⭐有料</em>）
+                  <textarea id="inSnsFooter" rows="2" maxlength="400" placeholder="例：ご予約はプロフィールの公式LINEから24時間受付中✨&#10;〇〇駅徒歩3分／営業時間 9:00〜20:00"></textarea>
+                </label>
+              </div>
+            </div>
+            <p id="snsHint" class="hint sns-hint"></p>
+          </div>
+        </div>
+
+        <p class="foot">動画・画像は<strong>お使いの端末内だけで処理</strong>され、サーバーには送信されません。</p>
+
+        <footer class="site-footer in-tab-footer">
+          <div class="contact-card">
+            <div class="contact-text">
+              <h2>💬 お問い合わせ・サポート窓口</h2>
+              <p>使い方のご質問・不具合のご報告・治療院DXのご相談は公式LINEにて承っております。<small>※サポートは公式LINE窓口のみとなります。</small></p>
+            </div>
+            <a id="btnLineContact" href="https://lin.ee/XB6R3kS" target="_blank" rel="noopener noreferrer" class="btn line-btn">💬 公式LINEでお問い合わせ</a>
+          </div>
+          <nav class="footer-links" aria-label="サポート・規約リンク">
+            <a href="help.html">ヘルプ・よくある質問</a>
+            <a href="terms.html">利用規約</a>
+            <a href="privacy.html">プライバシーポリシー</a>
+            <a href="tokushoho.html">特定商取引法に基づく表記</a>
+          </nav>
+          <p class="footer-copy">© 2026 整体院 導 AI Systems</p>
+        </footer>
+      </div>
+
     </div>
-    <p class="foot">動画・画像は<strong>お使いの端末内だけで処理</strong>され、サーバーには送信されません。</p>
   </section>
 </main>
 
-<!-- お問い合わせ欄（LINE窓口のみ）＆ 法務・ヘルプフッター -->
-<footer class="site-footer">
-  <div class="contact-card">
-    <div class="contact-text">
-      <h2>💬 お問い合わせ・サポート窓口</h2>
-      <p>使い方のご質問・不具合のご報告・治療院DXシステムのご相談は、公式LINEにて承っております。<small>※お問い合わせは公式LINE窓口のみとなります（メール・お電話での個別サポートは行っておりません）。</small></p>
+<!-- PWA アプリ追加（ホーム画面インストール）案内モーダル -->
+<div id="installModal" class="modal" hidden>
+  <div class="modal-body install-modal-body">
+    <button type="button" id="installModalClose" class="modal-x" aria-label="閉じる">×</button>
+    <div class="install-hero">
+      <img src="icon-192.png" alt="BAメーカー アイコン" width="60" height="60" class="install-app-icon">
+      <div>
+        <h2>📲 アプリとしてホーム画面に追加</h2>
+        <p class="hint" style="margin:2px 0 0">アドレスバーなしの<strong>全画面アプリ</strong>として1秒で起動できます（App Store登録・追加料金不要）。</p>
+      </div>
     </div>
-    <a id="btnLineContact" href="https://lin.ee/XB6R3kS" target="_blank" rel="noopener noreferrer" class="btn line-btn">💬 公式LINEでお問い合わせ</a>
+
+    <div id="installPromptBox" class="install-step-box" hidden>
+      <button type="button" id="btnTriggerInstallPrompt" class="btn primary block" style="width:100%;margin-top:0">📲 ワンタップでアプリをインストール</button>
+    </div>
+
+    <div id="installIosBox" class="install-step-box">
+      <h3>📱 iPhone / iPad（Safari）の手順</h3>
+      <ol class="install-steps">
+        <li>画面下部（iPadは右上）の<strong>共有ボタン「四角から上矢印 ⬆️」</strong>をタップ</li>
+        <li>メニュー内の<strong>「ホーム画面に追加 ➕」</strong>をタップ</li>
+        <li>右上の<strong>「追加」</strong>を押すと、ホーム画面にアイコンが並びます</li>
+      </ol>
+    </div>
+
+    <div id="installOtherBox" class="install-step-box">
+      <h3>💻 Android / PC（Chrome・Edge）の手順</h3>
+      <ol class="install-steps">
+        <li>ブラウザ右上の<strong>メニュー「⋮」</strong>またはアドレスバー右端の<strong>インストールアイコン</strong>をクリック</li>
+        <li><strong>「アプリをインストール」</strong>または<strong>「ホーム画面に追加」</strong>を選択</li>
+      </ol>
+    </div>
+
+    <button type="button" id="btnInstallModalOk" class="btn block" style="width:100%">閉じる</button>
   </div>
-  <nav class="footer-links" aria-label="サポート・規約リンク">
-    <a href="help.html">ヘルプ・よくある質問</a>
-    <a href="terms.html">利用規約</a>
-    <a href="privacy.html">プライバシーポリシー</a>
-    <a href="tokushoho.html">特定商取引法に基づく表記</a>
-  </nav>
-  <p class="footer-copy">© 2026 整体院 導 AI Systems</p>
-</footer>
+</div>
 
 <!-- プラン・ライセンス管理モーダル（無料／有料で画面を分離） -->
 <div id="modal" class="modal" hidden>
@@ -488,10 +710,10 @@
   </div>
 </div>
 
-<script src="config.js?v=19"></script>
-<script src="bgm.js?v=19"></script>
-<script src="motion.js?v=19"></script>
-<script src="face.js?v=19"></script>
-<script src="app.js?v=19"></script>
+<script src="config.js?v=20"></script>
+<script src="bgm.js?v=20"></script>
+<script src="motion.js?v=20"></script>
+<script src="face.js?v=20"></script>
+<script src="app.js?v=20"></script>
 </body>
 </html>

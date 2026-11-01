@@ -230,8 +230,22 @@
     return clamp(state.wipePos, 0.08, 0.92);
   }
 
+  function refreshAppTabDots() {
+    const map = [
+      ["dotTabMedia", !!(state.panels.before.el || state.panels.after.el)],
+      ["dotTabText", !!(state.symptom || state.age || state.sub)],
+      ["dotTabFx", !!(state.faceBlur || state.posture.grid || state.posture.lines || state.posture.markers.length || state.disclaimer.enabled)],
+      ["dotTabCta", !!state.endCard.enabled]
+    ];
+    for (let i = 0; i < map.length; i++) {
+      const el = $(map[i][0]);
+      if (el && el.hidden === map[i][1]) el.hidden = !map[i][1];
+    }
+  }
+
   function markDirty() {
     previewDirty = true;
+    refreshAppTabDots();
     if (lastExport) refreshSnsUI();
   }
 
@@ -260,6 +274,10 @@
     $("bgmTitle").textContent = state.bgm.enabled ? "🎵 " + info.title : "BGMオフ（" + info.title + "）";
     $("chkBgm").checked = state.bgm.enabled;
     $("chkBgm").closest(".bgm-box").classList.toggle("off", !state.bgm.enabled);
+    const jumpBtn = $("btnJumpBgmSetting");
+    if (jumpBtn) {
+      jumpBtn.textContent = state.bgm.enabled ? "🎵 BGMオン・誘導設定" : "🔇 BGMオフ・誘導設定";
+    }
     const willVideo = Object.values(state.panels).some(p => p.type === "video") || state.bgm.enabled || state.endCard.enabled;
     $("btnSave").textContent = willVideo
       ? (state.bgm.enabled ? "💾 動画で保存する（🎵BGM付き）" : "💾 動画で保存する")
@@ -1639,6 +1657,7 @@
     }
     captionEdited = false;
     syncAutoCaption();
+    syncQuickChipsUI();
     renderThemes();
     refreshBgmUI();
     refreshProTrialUI();
@@ -1685,6 +1704,7 @@
     if ($("inSnsFooter")) $("inSnsFooter").value = "";
     captionEdited = false;
     syncAutoCaption();
+    syncQuickChipsUI();
 
     if ($("modal")) $("modal").hidden = true;
     refreshBgmUI();
@@ -3375,11 +3395,27 @@
   });
   const endPtr = (e) => {
     const hadOverlayDrag = !!(drag && (drag.kind === "text" || drag.kind === "blur"));
-    if (drag && drag.kind === "text" && drag.moved && pointers.size <= 1) saveSettings();
-    if (drag && drag.kind === "blur" && drag.moved && pointers.size <= 1) {
-      const p = state.panels[drag.which];
-      if (p && p.type === "video" && p.blur && (p.blur.mode === "patch" || p.blur.status === "fallback")) {
-        p.blur.trackPromise = runFaceTrack(drag.which, true);
+    if (drag && drag.kind === "text" && pointers.size <= 1) {
+      if (drag.moved) {
+        saveSettings();
+      } else {
+        switchAppTab("text");
+        const inputId = { symptom: "inSymptom", age: "inAge", clinic: "inClinic", sub: "inSub" }[drag.key];
+        const targetEl = inputId ? $(inputId) : null;
+        if (targetEl) {
+          const blk = targetEl.closest(".field-block") || targetEl;
+          try { blk.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (_) {}
+        }
+      }
+    }
+    if (drag && drag.kind === "blur" && pointers.size <= 1) {
+      if (drag.moved) {
+        const p = state.panels[drag.which];
+        if (p && p.type === "video" && p.blur && (p.blur.mode === "patch" || p.blur.status === "fallback")) {
+          p.blur.trackPromise = runFaceTrack(drag.which, true);
+        }
+      } else {
+        switchAppTab("fx");
       }
     }
     pointers.delete(e.pointerId);
@@ -4645,8 +4681,285 @@
     $("btnDeactivate").onclick = deactivateCurrentDevice;
   }
 
+  // ---------- アプリ5タブ切り替え ＆ ワンタップ入力チップ ＆ PWAインストール制御 ----------
+  const VALID_APP_TABS = ["media", "text", "fx", "cta", "save"];
+  let activeAppTab = "media";
+
+  const escChipRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const hasSymptomToken = (cur, token) => new RegExp("(?:^|・)" + escChipRe(token) + "(?:・|$)").test(cur);
+
+  function syncQuickChipsUI() {
+    const curSym = ($("inSymptom") ? $("inSymptom").value.trim() : "");
+    document.querySelectorAll("[data-chip-symptom]").forEach((btn) => {
+      btn.classList.toggle("active", !!curSym && hasSymptomToken(curSym, btn.dataset.chipSymptom));
+    });
+
+    const curAge = ($("inAge") ? $("inAge").value.trim() : "");
+    document.querySelectorAll("[data-chip-decade]").forEach((btn) => {
+      btn.classList.toggle("active", !!curAge && curAge.includes(btn.dataset.chipDecade));
+    });
+    document.querySelectorAll("[data-chip-role]").forEach((btn) => {
+      const role = btn.dataset.chipRole;
+      const hit = !!curAge && new RegExp("(?:^|[\\s・])" + escChipRe(role) + "(?:$|[\\s・])").test(curAge);
+      btn.classList.toggle("active", hit);
+    });
+
+    document.querySelectorAll("[data-chip-target]").forEach((btn) => {
+      const el = $(btn.dataset.chipTarget);
+      const cur = el ? el.value.trim() : "";
+      btn.classList.toggle("active", cur === btn.dataset.chipVal);
+    });
+  }
+
+  function setInputAndFire(inputId, nextVal) {
+    const el = $(inputId);
+    if (!el) return;
+    const maxL = el.maxLength > 0 ? el.maxLength : 200;
+    el.value = String(nextVal || "").slice(0, maxL);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    syncQuickChipsUI();
+  }
+
+  function switchAppTab(tabKey) {
+    if (!VALID_APP_TABS.includes(tabKey)) return;
+    activeAppTab = tabKey;
+    document.querySelectorAll(".app-tab[data-tab]").forEach((btn) => {
+      const on = btn.dataset.tab === tabKey;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    document.querySelectorAll(".tab-panel[data-tab-panel]").forEach((panel) => {
+      const on = panel.dataset.tabPanel === tabKey;
+      panel.hidden = !on;
+      panel.classList.toggle("active", on);
+    });
+    const scroller = $("tabPanelsScroller");
+    if (scroller) scroller.scrollTop = 0;
+
+    if (tabKey !== "cta" && state.endCard.previewing) {
+      state.endCard.previewing = false;
+      refreshEndCardPreviewBtn();
+      markDirty();
+    }
+    syncQuickChipsUI();
+    refreshAppTabDots();
+  }
+
+  function bindAppShellAndChips() {
+    document.querySelectorAll(".app-tab[data-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => switchAppTab(btn.dataset.tab));
+    });
+    document.querySelectorAll("[data-goto-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => switchAppTab(btn.dataset.gotoTab));
+    });
+
+    // 症状チップ（1タップ選択・複数タップで「・」自動連結・再タップで解除）
+    document.querySelectorAll("[data-chip-symptom]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const val = btn.dataset.chipSymptom;
+        const cur = ($("inSymptom") ? $("inSymptom").value.trim() : "");
+        let next = "";
+        if (cur && hasSymptomToken(cur, val)) {
+          next = cur
+            .replace(new RegExp("(?:^|・)" + escChipRe(val) + "(?=・|$)"), "")
+            .replace(/^・+|・+$/g, "")
+            .replace(/・{2,}/g, "・");
+        } else if (!cur) {
+          next = val;
+        } else if ((cur + "・" + val).length <= 30) {
+          next = cur + "・" + val;
+        } else {
+          next = val;
+        }
+        setInputAndFire("inSymptom", next);
+      });
+    });
+
+    // 年代チップ ＆ 性別・属性チップ（自動結合して「40代 女性」等を2タップ生成）
+    const GENDERS = ["女性", "男性"];
+    const LIFESTYLES = ["産後ママ", "デスクワーク", "立ち仕事", "学生"];
+
+    document.querySelectorAll("[data-chip-decade]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const d = btn.dataset.chipDecade;
+        const cur = ($("inAge") ? $("inAge").value.trim() : "");
+        const m = cur.match(/([1-9]0代)/);
+        const rest = cur.replace(/([1-9]0代)/g, "").replace(/^[\s・]+|[\s・]+$/g, "");
+        const nextDec = (m && m[1] === d) ? "" : d;
+        const next = [nextDec, rest].filter(Boolean).join(" ").slice(0, 20);
+        setInputAndFire("inAge", next);
+      });
+    });
+
+    document.querySelectorAll("[data-chip-role]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const r = btn.dataset.chipRole;
+        const cur = ($("inAge") ? $("inAge").value.trim() : "");
+        const m = cur.match(/([1-9]0代)/);
+        const dec = m ? m[1] : "";
+        let curGender = GENDERS.find((g) => new RegExp("(?:^|[\\s・])" + g + "(?:$|[\\s・])").test(cur)) || "";
+        let curLife = LIFESTYLES.find((l) => cur.includes(l)) || "";
+
+        if (GENDERS.includes(r)) {
+          curGender = curGender === r ? "" : r;
+        } else {
+          curLife = curLife === r ? "" : r;
+        }
+        const rolePart = [curGender, curLife].filter(Boolean).join("・");
+        let full = [dec, rolePart].filter(Boolean).join(" ");
+        if (full.length > 20) {
+          full = [dec, r].filter(Boolean).join(" ").slice(0, 20);
+        }
+        setInputAndFire("inAge", full);
+      });
+    });
+
+    // 単一選択ワンタップチップ（補足・免責・初回オファー・LINE誘導文）
+    document.querySelectorAll("[data-chip-target]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tid = btn.dataset.chipTarget;
+        const val = btn.dataset.chipVal;
+        const el = $(tid);
+        if (!el) return;
+        const toggleable = tid === "inSub" || tid === "inEndOffer";
+        const next = (toggleable && el.value.trim() === val) ? "" : val;
+        setInputAndFire(tid, next);
+      });
+    });
+
+    // ワンタップクリアボタン
+    document.querySelectorAll("[data-clear-input]").forEach((btn) => {
+      btn.addEventListener("click", () => setInputAndFire(btn.dataset.clearInput, ""));
+    });
+
+    // 手動入力時にもチップのアクティブ表示をリアルタイム同期
+    ["inSymptom", "inAge", "inSub", "inDisclaimer", "inEndOffer", "inEndCta"].forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener("input", syncQuickChipsUI);
+    });
+
+    // モバイル用プレビュー拡大・縮小トグル
+    const expBtn = $("btnStageExpand");
+    if (expBtn) {
+      expBtn.addEventListener("click", () => {
+        const on = document.body.classList.toggle("stage-expanded");
+        expBtn.setAttribute("aria-pressed", on ? "true" : "false");
+        expBtn.textContent = on ? "🗕 縮小" : "🔍 拡大";
+      });
+    }
+
+    // スマホのソフトキーボード表示検知（実画面高が縮んだ時のみプレビューをコンパクト化）
+    if (window.visualViewport) {
+      let baseVh = Math.max(window.innerHeight, window.visualViewport.height);
+      const syncKbClass = () => {
+        const vv = window.visualViewport;
+        if (!vv || window.innerWidth > 860) {
+          document.body.classList.remove("kb-open");
+          return;
+        }
+        if (vv.height > baseVh) baseVh = vv.height;
+        const activeTag = document.activeElement ? document.activeElement.tagName : "";
+        const isTyping = activeTag === "INPUT" || activeTag === "TEXTAREA";
+        document.body.classList.toggle("kb-open", isTyping && vv.height < baseVh * 0.78);
+      };
+      window.visualViewport.addEventListener("resize", syncKbClass);
+      document.addEventListener("focusout", () => setTimeout(syncKbClass, 80));
+    }
+
+    syncQuickChipsUI();
+    refreshAppTabDots();
+  }
+
+  function initPwaAppShell() {
+    if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch(() => {});
+      });
+    }
+
+    const installBtn = $("btnInstallApp");
+    const installModal = $("installModal");
+    const promptBox = $("installPromptBox");
+    const triggerBtn = $("btnTriggerInstallPrompt");
+    if (!installBtn || !installModal) return;
+
+    const isStandalone = () =>
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+      window.navigator.standalone === true;
+
+    let deferredPrompt = null;
+
+    const syncInstallBtn = () => {
+      installBtn.hidden = isStandalone();
+    };
+    syncInstallBtn();
+
+    if (window.matchMedia) {
+      const mq = window.matchMedia("(display-mode: standalone)");
+      if (mq.addEventListener) mq.addEventListener("change", syncInstallBtn);
+    }
+
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      if (promptBox) promptBox.hidden = false;
+      syncInstallBtn();
+    });
+
+    window.addEventListener("appinstalled", () => {
+      deferredPrompt = null;
+      if (promptBox) promptBox.hidden = true;
+      installModal.hidden = true;
+      installBtn.hidden = true;
+      setMsg("📲 ホーム画面にBAメーカーを追加しました！", "ok");
+    });
+
+    const runNativePrompt = async () => {
+      if (!deferredPrompt) return false;
+      const p = deferredPrompt;
+      deferredPrompt = null;
+      if (promptBox) promptBox.hidden = true;
+      try {
+        await p.prompt();
+        if (p.userChoice && typeof p.userChoice.catch === "function") {
+          p.userChoice.catch(() => {});
+        }
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
+
+    installBtn.addEventListener("click", async () => {
+      if (await runNativePrompt()) return;
+      const ua = navigator.userAgent || "";
+      const isIos = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+      const iosBox = $("installIosBox");
+      const otherBox = $("installOtherBox");
+      if (iosBox && otherBox) {
+        iosBox.style.order = isIos ? "0" : "1";
+        otherBox.style.order = isIos ? "1" : "0";
+      }
+      installModal.hidden = false;
+    });
+
+    if (triggerBtn) {
+      triggerBtn.addEventListener("click", async () => {
+        if (await runNativePrompt()) installModal.hidden = true;
+      });
+    }
+    const closeInstall = () => { installModal.hidden = true; };
+    if ($("installModalClose")) $("installModalClose").onclick = closeInstall;
+    if ($("btnInstallModalOk")) $("btnInstallModalOk").onclick = closeInstall;
+    installModal.addEventListener("click", (e) => {
+      if (e.target === installModal) closeInstall();
+    });
+  }
+
   loadSettings();
   bind();
+  bindAppShellAndChips();
+  initPwaAppShell();
   initLicense();
   if (document.fonts) {
     const bumpFont = () => { fontEpoch++; markDirty(); };

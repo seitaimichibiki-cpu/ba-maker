@@ -424,5 +424,268 @@ body.is-pro .pro-tag{background:rgba(53,194,138,.15);color:var(--ok);border-colo
 .adm-log-tag.checkout_completed,.adm-log-tag.payment_recovered{background:rgba(53,194,138,.18);color:#65e3af}
 .adm-log-tag.self_recover{background:rgba(146,212,255,.18);color:#92d4ff}
 
+/* ==========================================================================
+   PWA アプリシェル ＆ CapCut風 上部プレビュー固定＋5タブ切り替えUI (v20)
+   ========================================================================== */
+.app-install-btn{
+  background:rgba(53,194,138,.15);
+  border-color:rgba(53,194,138,.5);
+  color:#6bf0b8;
+  white-space:nowrap;
+}
+.app-install-btn:hover{background:rgba(53,194,138,.25);color:#fff}
+
+.card-head-flex{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.card-head-flex h2{margin:0}
+.inline-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.inline-actions .btn.tiny{margin:0}
+
+.stage-guide-pill{
+  display:inline-flex;align-items:center;gap:5px;margin:0;
+  padding:5px 11px;border-radius:10px;border:1px solid var(--line);
+  background:#222733;color:var(--text);font-size:12.5px;font-weight:700;cursor:pointer;
+  user-select:none;
+}
+.stage-guide-pill input{margin:0;width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+.mobile-only-btn{display:none}
+
+.app-status-strip{max-width:440px;margin:0 auto}
+.app-status-strip .progress{margin-top:6px}
+.app-status-strip .msg{margin:4px 0 0;min-height:0;font-weight:700}
+.app-status-strip .msg:empty{display:none}
+
+/* ---- 5タブナビゲーションバー（PC: 右カラム上部スティッキー ／ スマホ: 画面最下部ドック） ---- */
+.app-tabbar{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:6px;
+  background:#141821;
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:6px;
+  margin-bottom:12px;
+  position:sticky;
+  top:58px;
+  z-index:9;
+  box-shadow:0 6px 20px rgba(0,0,0,.28);
+}
+.app-tab{
+  appearance:none;
+  border:1px solid transparent;
+  background:transparent;
+  color:var(--sub);
+  border-radius:10px;
+  padding:7px 2px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:2px;
+  cursor:pointer;
+  font-family:inherit;
+  transition:background .15s,color .15s,border-color .15s,transform .1s;
+  min-width:0;
+}
+.app-tab:hover{color:var(--text);background:rgba(255,255,255,.04)}
+.app-tab.active{
+  background:rgba(255,90,95,.16);
+  border-color:rgba(255,90,95,.6);
+  color:#fff;
+}
+.app-tab.save-tab{color:#77e8b9}
+.app-tab.save-tab.active{
+  background:rgba(53,194,138,.2);
+  border-color:var(--ok);
+  color:#fff;
+}
+.app-tab-ico{position:relative;font-size:17px;line-height:1.15;display:inline-flex;align-items:center;justify-content:center}
+.app-tab-lbl{font-size:11px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.tab-dot{
+  position:absolute;top:-2px;right:-7px;
+  width:7px;height:7px;border-radius:50%;
+  background:var(--ok);box-shadow:0 0 0 2px #141821;
+}
+
+.tab-panel[hidden]{display:none !important}
+
+.tab-step-nav{margin:4px 0 8px}
+.tab-step-nav .btn.block{width:100%;margin-top:0;padding:13px 14px;font-size:15px}
+.tab-step-duo{display:grid;grid-template-columns:1fr 1.15fr;gap:8px;margin:4px 0 8px}
+.tab-step-duo .btn{padding:12px 10px;font-size:13.5px;text-align:center}
+
+/* ---- ワンタップ入力チップ（症状・年代・属性・補足・オファー） ---- */
+.field-block{margin-bottom:14px}
+.field-label-row{
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+  font-size:12px;font-weight:700;color:var(--sub);margin-bottom:4px;
+}
+.field-block input[type=text]{margin-top:0}
+.chip-clear-btn{
+  appearance:none;background:none;border:1px solid #2e3442;color:var(--sub);
+  border-radius:99px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;
+}
+.chip-clear-btn:hover{color:#fff;border-color:#4b556b;background:rgba(255,255,255,.05)}
+
+.chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.chip-row.compact-chips{gap:5px;margin-top:6px}
+.q-chip{
+  appearance:none;
+  background:#11151d;
+  border:1px solid #2c3240;
+  color:#d3dae6;
+  border-radius:99px;
+  padding:5px 11px;
+  font-size:12px;
+  font-weight:700;
+  line-height:1.25;
+  cursor:pointer;
+  font-family:inherit;
+  transition:background .12s,border-color .12s,color .12s,transform .08s;
+}
+.q-chip:hover{border-color:#4b556b;color:#fff}
+.q-chip:active{transform:scale(.97)}
+.q-chip.active{
+  background:rgba(255,90,95,.22);
+  border-color:var(--accent);
+  color:#fff;
+  box-shadow:0 0 0 1px rgba(255,90,95,.24);
+}
+
+/* ---- 保存タブ内の画質・BGMクイックバー ＆ 常時展開SNSキャプション枠 ---- */
+.save-quick-bar{display:flex;align-items:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.save-quality-lbl{flex:1;min-width:165px;margin-bottom:0}
+.save-bgm-pill{white-space:nowrap;padding:10px 12px;background:#141b26;border-color:#2f4463;color:#bfd9ff}
+.sns-caption-card{background:#12151b;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.sns-caption-title{font-size:12.5px;font-weight:700;color:var(--text)}
+.in-tab-footer{padding:10px 0 8px;margin-top:10px}
+
+/* ---- PWAインストール案内モーダル ---- */
+.install-modal-body{max-width:430px}
+.install-hero{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding-right:20px}
+.install-hero h2{font-size:17px;margin:0}
+.install-app-icon{border-radius:14px;flex-shrink:0;border:1px solid var(--line)}
+.install-step-box{background:#12151c;border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:10px}
+.install-step-box h3{margin:0 0 6px;font-size:13.5px;color:#fff}
+.install-steps{margin:0;padding-left:20px;font-size:12.5px;color:#d2d8e4;line-height:1.65}
+.install-steps li{margin:3px 0}
+
+/* ---- スマホ・タブレット縦向き（860px以下）：100dvh固定アプリ画面（縦スクロール解消） ---- */
+@media(max-width:860px){
+  html:has(body.editor-app),
+  body.editor-app{
+    height:100vh;
+    height:100dvh;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    overscroll-behavior:none;
+  }
+  body.editor-app .topbar{
+    flex:0 0 auto;
+    position:static;
+    padding:calc(6px + env(safe-area-inset-top, 0px)) 10px 6px;
+    gap:6px;
+  }
+  body.editor-app .brand{font-size:15.5px;white-space:nowrap}
+  body.editor-app .brand small{display:none}
+  body.editor-app .topbar-right{gap:5px;flex-wrap:nowrap}
+  body.editor-app .topbar-right .badge{font-size:10.5px;padding:2px 7px;white-space:nowrap}
+  body.editor-app .topbar-right .btn.small{padding:5px 8px;font-size:11.5px;white-space:nowrap}
+
+  body.editor-app .app-workspace{
+    flex:1 1 auto;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+    gap:0;
+    padding:0;
+    margin:0;
+    max-width:100%;
+    width:100%;
+  }
+  body.editor-app .preview-col{
+    flex:0 0 auto;
+    position:static;
+    width:100%;
+    background:#090b10;
+    border-bottom:1px solid var(--line);
+    padding:6px 10px 6px;
+  }
+  body.editor-app .preview-wrap{padding:4px;border-radius:11px}
+  body.editor-app #preview{
+    height:min(34dvh, 320px);
+    width:auto;
+    max-width:88vw;
+    aspect-ratio:9/16;
+  }
+  body.editor-app #preview[data-aspect="4:5"]{
+    height:min(33dvh, 295px);
+    width:auto;
+    max-width:88vw;
+    aspect-ratio:4/5;
+  }
+  body.editor-app #preview[data-aspect="1:1"]{
+    height:min(31dvh, 270px);
+    width:auto;
+    max-width:84vw;
+    aspect-ratio:1/1;
+  }
+  /* 🔍 拡大ボタンON時 */
+  body.editor-app.stage-expanded #preview{height:min(55dvh, 520px)}
+  body.editor-app.stage-expanded #preview[data-aspect="4:5"]{height:min(50dvh, 450px)}
+  body.editor-app.stage-expanded #preview[data-aspect="1:1"]{height:min(45dvh, 360px)}
+
+  /* ソフトキーボード表示時は自動でプレビューをコンパクト化して入力欄を広く確保 */
+  body.editor-app.kb-open #preview,
+  body.editor-app.kb-open #preview[data-aspect="4:5"],
+  body.editor-app.kb-open #preview[data-aspect="1:1"]{
+    height:min(17dvh, 128px);
+  }
+  body.editor-app.kb-open .stage-hint,
+  body.editor-app.kb-open .preview-controls{display:none}
+
+  body.editor-app .preview-controls{margin-top:5px;gap:5px}
+  body.editor-app .preview-controls .btn.small,
+  body.editor-app .stage-guide-pill{padding:4px 9px;font-size:11.5px;border-radius:8px}
+  body.editor-app .mobile-only-btn{display:inline-flex;align-items:center;gap:3px}
+  body.editor-app .stage-hint{font-size:11px;margin:3px 0 0}
+
+  body.editor-app .controls-col{
+    flex:1 1 auto;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+    width:100%;
+  }
+  body.editor-app .tab-panels{
+    order:1;
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    padding:10px 10px 16px;
+  }
+  body.editor-app .app-tabbar{
+    order:2;
+    flex:0 0 auto;
+    position:static;
+    margin:0;
+    border-radius:0;
+    border-left:none;
+    border-right:none;
+    border-bottom:none;
+    background:#12151e;
+    padding:5px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+    box-shadow:0 -4px 16px rgba(0,0,0,.35);
+  }
+  body.editor-app .card{padding:12px 13px;margin-bottom:10px;border-radius:12px}
+  body.editor-app .pick{min-height:88px;padding:12px 6px}
+}
+
+@media(max-width:380px){
+  body.editor-app #planBadge{display:none}
+}
+
+
 
 
