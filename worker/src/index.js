@@ -140,7 +140,41 @@ function isAdminLicenseRecord(env, record) {
 
 // ---------- KV ストレージ操作 ----------
 const AUDIT_LOG_KEY = "meta:audit_log";
+const KEY_INDEX_KEY = "meta:key_index";
 const MAX_AUDIT_LOGS = 80;
+
+async function getKeyIndex(env) {
+  try {
+    const raw = await env.LICENSES.get(KEY_INDEX_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.map((k) => normKey(k)).filter(Boolean) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function addKeyToIndex(env, nk) {
+  if (!nk) return;
+  try {
+    const idx = await getKeyIndex(env);
+    if (!idx.includes(nk)) {
+      idx.unshift(nk);
+      await env.LICENSES.put(KEY_INDEX_KEY, JSON.stringify(idx));
+    }
+  } catch (e) {}
+}
+
+async function removeKeyFromIndex(env, nk) {
+  if (!nk) return;
+  try {
+    const idx = await getKeyIndex(env);
+    const next = idx.filter((k) => k !== nk);
+    if (next.length !== idx.length) {
+      await env.LICENSES.put(KEY_INDEX_KEY, JSON.stringify(next));
+    }
+  } catch (e) {}
+}
 
 async function getAuditLogs(env) {
   try {
@@ -184,6 +218,7 @@ async function saveLicenseRecord(env, record) {
   record.key = nk;
   record.updatedAt = new Date().toISOString();
   await env.LICENSES.put(`lic:${nk}`, JSON.stringify(record));
+  await addKeyToIndex(env, nk);
   if (record.subscriptionId) {
     await env.LICENSES.put(`sub:${record.subscriptionId}`, nk);
   }
@@ -199,25 +234,32 @@ async function deleteLicenseRecord(env, record) {
   if (!record || !record.key) return;
   const nk = normKey(record.key);
   await env.LICENSES.delete(`lic:${nk}`);
+  await removeKeyFromIndex(env, nk);
   if (record.subscriptionId) await env.LICENSES.delete(`sub:${record.subscriptionId}`);
   if (record.customerId) await env.LICENSES.delete(`cus:${record.customerId}`);
   if (record.checkoutSessionId) await env.LICENSES.delete(`cs:${record.checkoutSessionId}`);
 }
 
 async function listAllLicenseRecords(env) {
-  if (typeof env.LICENSES.list !== "function") return [];
-  const names = [];
-  let cursor = undefined;
-  for (let pageIdx = 0; pageIdx < 20; pageIdx++) {
-    const res = await env.LICENSES.list({ prefix: "lic:", cursor });
-    if (res && Array.isArray(res.keys)) {
-      for (const item of res.keys) {
-        if (item && item.name) names.push(item.name);
-      }
-    }
-    if (!res || res.list_complete || !res.cursor) break;
-    cursor = res.cursor;
+  const nameSet = new Set();
+  const indexedKeys = await getKeyIndex(env);
+  for (const nk of indexedKeys) {
+    if (nk) nameSet.add(`lic:${nk}`);
   }
+  if (typeof env.LICENSES.list === "function") {
+    let cursor = undefined;
+    for (let pageIdx = 0; pageIdx < 20; pageIdx++) {
+      const res = await env.LICENSES.list({ prefix: "lic:", cursor });
+      if (res && Array.isArray(res.keys)) {
+        for (const item of res.keys) {
+          if (item && item.name) nameSet.add(item.name);
+        }
+      }
+      if (!res || res.list_complete || !res.cursor) break;
+      cursor = res.cursor;
+    }
+  }
+  const names = Array.from(nameSet);
   const rawList = await Promise.all(names.map((n) => env.LICENSES.get(n)));
   const records = [];
   for (const raw of rawList) {

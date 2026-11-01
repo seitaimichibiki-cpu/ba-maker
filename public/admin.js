@@ -433,10 +433,42 @@
         showNotice($("issueMsg"), (res.data && res.data.message) || "発行に失敗しました。", "err");
         return;
       }
+      const issuedRec = res.data.record;
       lastIssued = {
-        key: res.data.record.key,
+        key: issuedRec.key,
         url: res.data.activateUrl
       };
+      await loadDashboard(false);
+      if (dashData && Array.isArray(dashData.records) && !dashData.records.some((x) => x.key === issuedRec.key)) {
+        dashData.records.unshift({
+          key: issuedRec.key,
+          activateUrl: res.data.activateUrl,
+          isOwnerAdmin: false,
+          isStripe: false,
+          email: issuedRec.email || "",
+          note: issuedRec.note || "",
+          status: issuedRec.status || "active",
+          revokedReason: null,
+          cancelAtPeriodEnd: false,
+          currentPeriodEnd: null,
+          deviceCount: Array.isArray(issuedRec.devices) ? issuedRec.devices.length : 0,
+          maxDevices: issuedRec.maxDevices || maxDevices,
+          devices: Array.isArray(issuedRec.devices) ? issuedRec.devices : [],
+          emailSentAt: issuedRec.emailSentAt || null,
+          paymentFailedAt: null,
+          lastPaidAt: null,
+          canceledAt: null,
+          subscriptionId: null,
+          customerId: null,
+          createdAt: issuedRec.createdAt || new Date().toISOString(),
+          updatedAt: issuedRec.updatedAt || new Date().toISOString()
+        });
+        if (dashData.summary) {
+          dashData.summary.totalLicenses = (dashData.summary.totalLicenses || 0) + 1;
+          dashData.summary.activeManualCount = (dashData.summary.activeManualCount || 0) + 1;
+        }
+        renderDashboard();
+      }
       $("issuedKeyCode").textContent = lastIssued.key;
       const mr = res.data.emailResult || {};
       $("issuedMailNote").textContent = email
@@ -448,7 +480,6 @@
       $("inIssueEmail").value = "";
       $("inIssueNote").value = "";
       showNotice($("issueMsg"), "", "");
-      await loadDashboard(false);
     } catch (err) {
       btn.disabled = false;
       showNotice($("issueMsg"), "通信エラーのため発行できませんでした。", "err");
@@ -597,6 +628,10 @@
       }
       showNotice($("admActionMsg"), `🗑 ${key} を削除しました。`, "ok");
       await loadDashboard(false);
+      if (dashData && Array.isArray(dashData.records) && dashData.records.some((x) => x.key === key)) {
+        dashData.records = dashData.records.filter((x) => x.key !== key);
+        renderDashboard();
+      }
     }
   });
 
