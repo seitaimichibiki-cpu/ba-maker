@@ -105,6 +105,7 @@
     offsetY: 0,
     keyframes: [],
     status: "idle",     // "idle" | "tracking" | "ai_ok" | "patch_ok" | "fallback" | "fixed"
+    trackPct: 0,
     trackId: 0,
     trackPromise: null
   });
@@ -113,7 +114,7 @@
     type: null, el: null, url: null, name: "", zoom: 1, ox: 0, oy: 0,
     trimStart: 0, autoTrimSec: 0, autoDetected: false,
     scanning: false, scanId: 0, scanPromise: null, audioSrc: null,
-    holdCanvas: null, hasHold: false, warmed: false, warming: false,
+    holdCanvas: null, hasHold: false, holdTime: 0, warmed: false, warming: false,
     frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null,
     blur: newBlur()
   });
@@ -138,6 +139,11 @@
       area: "",
       offer: "",
       cta: "ご予約はプロフィールの公式LINEから ▶",
+      logo: null,
+      logoDataUrl: "",
+      logoName: "",
+      logoSize: 280,
+      logoStamp: 0,
       previewing: false
     },
     disclaimer: {
@@ -319,29 +325,118 @@
   // ---------- 設定・テンプレートの保存・復元 ----------
   const LS_SETTINGS = "bam_settings_v1";
   const LS_PRESETS = "bam_presets_v1";
+  const END_LOGO_MIN_PX = 120;
+  const END_LOGO_MAX_PX = 560;
+  const END_LOGO_DEFAULT_PX = 280;
   const isHex = (v) => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
 
-  function saveSettings() {
+  function compressEndLogoToDataUrl(img) {
+    if (!img || !img.naturalWidth || !img.naturalHeight) return "";
+    const sc = Math.min(1, END_LOGO_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * sc));
+    const h = Math.max(1, Math.round(img.naturalHeight * sc));
+    const cv = document.createElement("canvas");
+    cv.width = w;
+    cv.height = h;
+    const cx = cv.getContext("2d");
+    cx.clearRect(0, 0, w, h);
+    cx.drawImage(img, 0, 0, w, h);
     try {
-      localStorage.setItem(LS_SETTINGS, JSON.stringify({
-        clinic: state.clinic,
-        theme: state.preferredTheme || state.theme,
-        custom: state.custom,
-        textPos: state.textPos,
-        bgm: state.bgm,
-        autoSync: state.autoSync,
-        endCard: {
+      const webp = cv.toDataURL("image/webp", 0.88);
+      if (webp && webp.startsWith("data:image/webp")) return webp;
+    } catch (e) {}
+    try {
+      const png = cv.toDataURL("image/png");
+      if (png && png.length <= 620_000) return png;
+      return cv.toDataURL("image/jpeg", 0.86);
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function syncEndLogoUI() {
+    const hasLogo = !!(state.endCard.logo && state.endCard.logo.naturalWidth > 0);
+    const nameEl = $("endLogoName");
+    if (nameEl) {
+      nameEl.textContent = hasLogo ? (state.endCard.logoName || "設定済み") : "未選択";
+      nameEl.classList.toggle("has-logo", hasLogo);
+    }
+    const clrBtn = $("btnEndLogoClear");
+    if (clrBtn) clrBtn.hidden = !hasLogo;
+    const sz = clamp(Math.round(Number(state.endCard.logoSize) || END_LOGO_DEFAULT_PX), END_LOGO_MIN_PX, END_LOGO_MAX_PX);
+    state.endCard.logoSize = sz;
+    const rangeEl = $("inEndLogoSize");
+    if (rangeEl) rangeEl.value = String(sz);
+    const numEl = $("inEndLogoSizeNum");
+    if (numEl && document.activeElement !== numEl) numEl.value = String(sz);
+  }
+
+  function restoreEndLogoFromDataUrl(dataUrl, name) {
+    if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) return;
+    const img = new Image();
+    img.onload = () => {
+      if (!img.naturalWidth || !img.naturalHeight) return;
+      state.endCard.logo = img;
+      state.endCard.logoDataUrl = dataUrl;
+      state.endCard.logoName = (name || "保存済みロゴ").slice(0, 48);
+      state.endCard.logoStamp++;
+      syncEndLogoUI();
+      markDirty();
+    };
+    img.src = dataUrl;
+  }
+
+  function clearEndLogo() {
+    if (state.endCard._objUrl) {
+      URL.revokeObjectURL(state.endCard._objUrl);
+      state.endCard._objUrl = "";
+    }
+    state.endCard.logo = null;
+    state.endCard.logoDataUrl = "";
+    state.endCard.logoName = "";
+    state.endCard.logoStamp++;
+    syncEndLogoUI();
+    saveSettings();
+    markDirty();
+  }
+
+  function saveSettings() {
+    const basePayload = {
+      clinic: state.clinic,
+      theme: state.preferredTheme || state.theme,
+      custom: state.custom,
+      textPos: state.textPos,
+      bgm: state.bgm,
+      autoSync: state.autoSync,
+      endCard: {
+        area: state.endCard.area,
+        offer: state.endCard.offer,
+        cta: state.endCard.cta,
+        logoSize: state.endCard.logoSize,
+        logoName: state.endCard.logoName,
+        logoDataUrl: state.endCard.logoDataUrl
+      },
+      disclaimerText: state.disclaimer.text,
+      snsFooter: state.snsFooter || state.preferredSnsFooter || ""
+    };
+    try {
+      localStorage.setItem(LS_SETTINGS, JSON.stringify(basePayload));
+    } catch (e) {
+      try {
+        basePayload.endCard = {
           area: state.endCard.area,
           offer: state.endCard.offer,
-          cta: state.endCard.cta
-        },
-        disclaimerText: state.disclaimer.text,
-        snsFooter: state.snsFooter || state.preferredSnsFooter || ""
-      }));
-    } catch (e) {}
+          cta: state.endCard.cta,
+          logoSize: state.endCard.logoSize
+        };
+        localStorage.setItem(LS_SETTINGS, JSON.stringify(basePayload));
+      } catch (_) {}
+    }
   }
 
   function loadSettings() {
+    let savedLogoDataUrl = "";
+    let savedLogoName = "";
     try {
       const raw = localStorage.getItem(LS_SETTINGS);
       if (raw) {
@@ -386,6 +481,13 @@
           if (typeof d.endCard.area === "string") state.endCard.area = d.endCard.area.slice(0, 32);
           if (typeof d.endCard.offer === "string") state.endCard.offer = d.endCard.offer.slice(0, 42);
           if (typeof d.endCard.cta === "string" && d.endCard.cta.trim()) state.endCard.cta = d.endCard.cta.slice(0, 36);
+          if (typeof d.endCard.logoSize === "number" && isFinite(d.endCard.logoSize)) {
+            state.endCard.logoSize = clamp(Math.round(d.endCard.logoSize), END_LOGO_MIN_PX, END_LOGO_MAX_PX);
+          }
+          if (typeof d.endCard.logoName === "string") savedLogoName = d.endCard.logoName.slice(0, 48);
+          if (typeof d.endCard.logoDataUrl === "string" && d.endCard.logoDataUrl.startsWith("data:image/")) {
+            savedLogoDataUrl = d.endCard.logoDataUrl;
+          }
         }
         if (d && typeof d.disclaimerText === "string" && d.disclaimerText.trim()) {
           state.disclaimer.text = d.disclaimerText.slice(0, 45);
@@ -404,6 +506,9 @@
     $("bgmVol").value = state.bgm.volume;
     $("selPhotoSec").value = String(state.bgm.photoSec);
     $("chkAutoSync").checked = state.autoSync;
+    syncEndLogoUI();
+    if ($("inEndLogoSizeNum")) $("inEndLogoSizeNum").value = String(state.endCard.logoSize);
+    if (savedLogoDataUrl) restoreEndLogoFromDataUrl(savedLogoDataUrl, savedLogoName);
     syncTextSliders();
     refreshBgmUI();
     refreshTrimUI();
@@ -523,6 +628,7 @@
 
   function getActiveProFeatures() {
     const list = [];
+    if (THEMES[state.theme] && THEMES[state.theme].pro) list.push("カラー配色");
     if (state.aspect !== "9:16") list.push(`サイズ切替(${state.aspect})`);
     if (state.layout !== "split-h") list.push(state.layout === "wipe" ? "スライド比較" : "上下2分割");
     if (state.faceBlur) list.push("AI顔ぼかし追従");
@@ -670,7 +776,7 @@
     upg.textContent = pro ? "⚙ プラン・端末管理" : "⭐ 有料プラン / キー入力";
     upg.className = pro ? "btn small" : "btn primary small";
 
-    $("btnLogo").textContent = pro ? "🖼 ロゴを追加" : "🔒 ロゴを追加（有料）";
+    $("btnLogo").textContent = pro ? "🖼 院名横ロゴを追加" : "🔒 院名横ロゴを追加（有料）";
 
     if (pro) {
       if (upgradeQuality) $("selQuality").value = "1080";
@@ -1016,18 +1122,23 @@
     Object.entries(THEMES).forEach(([key, t]) => {
       const tt = key === "custom" ? { ...t, ...state.custom } : t;
       const b = document.createElement("button");
+      b.type = "button";
       b.className = "theme" + (state.theme === key ? " active" : "") + (t.pro && !pro ? " locked" : "");
-      b.innerHTML = `<div class="sw" style="background:${tt.bg}"><i style="background:${tt.accent}"></i></div><span>${t.pro && !pro ? "🔒" : ""}${t.name}</span>`;
+      b.innerHTML = `<div class="sw" style="background:${tt.bg}"><i style="background:${tt.accent}"></i></div><span>${t.pro && !pro ? "⭐" : ""}${t.name}</span>`;
       b.onclick = () => {
-        if (t.pro && !requirePro(t.name + "テーマ")) return;
         state.theme = key;
         state.preferredTheme = key;
         saveSettings();
         renderThemes();
+        refreshProTrialUI();
       };
       box.appendChild(b);
     });
-    $("customBox").hidden = !(pro && state.theme === "custom");
+    const cur = theme();
+    if ($("cBg") && isHex(cur.bg)) $("cBg").value = cur.bg;
+    if ($("cText") && isHex(cur.text)) $("cText").value = cur.text;
+    if ($("cAccent") && isHex(cur.accent)) $("cAccent").value = cur.accent;
+    $("customBox").hidden = false;
     markDirty();
   }
 
@@ -1154,7 +1265,9 @@
       } else if (!p.el) {
         stEl.textContent = "写真・動画を選ぶと自動検出します";
       } else if (b.status === "tracking") {
-        stEl.textContent = "🔍 顔・頭の位置を解析中…";
+        stEl.textContent = b.trackPct > 0
+          ? `🔍 顔・頭の位置を解析中… (${b.trackPct}%)`
+          : "🔍 顔・頭の位置を解析中…";
       } else if (b.mode === "fixed") {
         stEl.textContent = "📌 位置固定中（プレビューの丸をドラッグで移動）";
         stEl.classList.add("ok");
@@ -1165,7 +1278,7 @@
         stEl.textContent = "✅ 指定した頭の位置から自動追従中";
         stEl.classList.add("ok");
       } else if (b.status === "fallback") {
-        stEl.textContent = "⚠ 正面顔未検出：丸を頭にドラッグ→「今の丸の位置から追従」または「位置を固定」で調整可";
+        stEl.textContent = "⚠ 動体自動追従中（ずれる時は丸を頭へドラッグして離すと再追従します）";
         stEl.classList.add("warn");
       } else {
         stEl.textContent = "待機中";
@@ -1193,12 +1306,14 @@
         b.offsetY = 0;
         b.mode = "fixed";
         b.status = "fixed";
+        b.trackPct = 100;
         blurRingUntil = Date.now() + 2600;
         refreshBlurStatusUI();
         markDirty();
         return;
       }
       b.status = "tracking";
+      b.trackPct = 0;
       refreshBlurStatusUI();
       const res = await FACE.trackImage(p.el, isCancelled);
       if (isCancelled() || !res) return;
@@ -1209,6 +1324,7 @@
       b.offsetY = 0;
       b.keyframes = res.keyframes || [];
       b.status = res.status;
+      b.trackPct = 100;
       blurRingUntil = Date.now() + 2600;
       refreshBlurStatusUI();
       markDirty();
@@ -1216,27 +1332,52 @@
     }
 
     if (p.type === "video") {
+      const applyPartial = (part) => {
+        if (isCancelled() || !part) return;
+        b.fixedX = part.mx;
+        b.fixedY = part.my;
+        b.baseR = part.mr;
+        if (part.keyframes && part.keyframes.length) b.keyframes = part.keyframes;
+        b.trackPct = Math.round((part.progress || 0) * 100);
+        refreshBlurStatusUI();
+        markDirty();
+      };
+
       if (fromCurrentAnchor) {
         const curT = p.el ? p.el.currentTime : (p.trimStart || 0);
         const cur = FACE.sampleAtTime(b, curT);
+        b.fixedX = cur.mx;
+        b.fixedY = cur.my;
+        b.baseR = cur.mr;
+        b.offsetX = 0;
+        b.offsetY = 0;
+        b.keyframes = [{ t: curT, mx: cur.mx, my: cur.my, mr: cur.mr }];
         b.mode = "patch";
         b.status = "tracking";
+        b.trackPct = 0;
         refreshBlurStatusUI();
+        markDirty();
+        if (p.scanning && p.scanPromise) {
+          try { await p.scanPromise; } catch (e) {}
+          if (isCancelled()) return;
+        }
         const res = await FACE.trackVideoFromAnchor(
           p.url,
           p.el.duration || 0,
           { t: curT, mx: cur.mx, my: cur.my, mr: cur.mr },
-          isCancelled
+          isCancelled,
+          { onProgress: applyPartial }
         );
         if (isCancelled()) return;
-        if (res) {
+        if (res && res.keyframes && res.keyframes.length) {
           b.fixedX = res.mx;
           b.fixedY = res.my;
           b.baseR = res.mr;
           b.offsetX = 0;
           b.offsetY = 0;
-          b.keyframes = res.keyframes || [];
+          b.keyframes = res.keyframes;
           b.status = "patch_ok";
+          b.trackPct = 100;
         } else {
           b.mode = "fixed";
           b.fixedX = cur.mx;
@@ -1245,6 +1386,7 @@
           b.offsetX = 0;
           b.offsetY = 0;
           b.status = "fixed";
+          b.trackPct = 100;
         }
         blurRingUntil = Date.now() + 2600;
         refreshBlurStatusUI();
@@ -1252,20 +1394,31 @@
         return;
       }
 
+      b.offsetX = 0;
+      b.offsetY = 0;
       b.status = "tracking";
+      b.trackPct = 0;
       refreshBlurStatusUI();
-      const res = await FACE.trackVideoAuto(p.url, p.el.duration || 0, isCancelled);
+      if (p.scanning && p.scanPromise) {
+        try { await p.scanPromise; } catch (e) {}
+        if (isCancelled()) return;
+      }
+      const res = await FACE.trackVideoAuto(p.url, p.el.duration || 0, isCancelled, {
+        onProgress: applyPartial
+      });
       if (isCancelled()) return;
-      if (res) {
+      if (res && res.keyframes && res.keyframes.length) {
         b.fixedX = res.mx;
         b.fixedY = res.my;
         b.baseR = res.mr;
         b.offsetX = 0;
         b.offsetY = 0;
-        b.keyframes = res.keyframes || [];
+        b.keyframes = res.keyframes;
         b.status = res.status;
+        b.trackPct = 100;
       } else {
         b.status = "fallback";
+        b.trackPct = 0;
       }
       blurRingUntil = Date.now() + 2600;
       refreshBlurStatusUI();
@@ -1402,6 +1555,7 @@
       endArea: state.endCard.area,
       endOffer: state.endCard.offer,
       endCta: state.endCard.cta,
+      endLogoSize: state.endCard.logoSize,
       disclaimerEnabled: state.disclaimer.enabled,
       disclaimerText: state.disclaimer.text
     };
@@ -1469,6 +1623,11 @@
     if (typeof pr.endArea === "string") { state.endCard.area = pr.endArea; $("inEndArea").value = pr.endArea; }
     if (typeof pr.endOffer === "string") { state.endCard.offer = pr.endOffer; $("inEndOffer").value = pr.endOffer; }
     if (typeof pr.endCta === "string" && pr.endCta) { state.endCard.cta = pr.endCta; $("inEndCta").value = pr.endCta; }
+    if (typeof pr.endLogoSize === "number" && isFinite(pr.endLogoSize)) {
+      state.endCard.logoSize = clamp(Math.round(pr.endLogoSize), END_LOGO_MIN_PX, END_LOGO_MAX_PX);
+      syncEndLogoUI();
+      if ($("inEndLogoSizeNum")) $("inEndLogoSizeNum").value = String(state.endCard.logoSize);
+    }
     if (typeof pr.disclaimerEnabled === "boolean") {
       state.disclaimer.enabled = pr.disclaimerEnabled;
       $("chkDisclaimer").checked = pr.disclaimerEnabled;
@@ -1497,6 +1656,10 @@
   function resetProOnlyFeatures() {
     setAspect("9:16");
     setLayout("split-h");
+    if (THEMES[state.theme] && THEMES[state.theme].pro) {
+      state.theme = "dark";
+      renderThemes();
+    }
     state.faceBlur = false;
     refreshBlurStatusUI();
 
@@ -1542,7 +1705,10 @@
     const rangeY = Math.max(0, (dh - frame.h) / 2);
     const dx = frame.x + (frame.w - dw) / 2 + p.ox * rangeX;
     const dy = frame.y + (frame.h - dh) / 2 + p.oy * rangeY;
-    const mediaT = (p.type === "video" && p.el) ? p.el.currentTime : 0;
+    const useHold = shouldUseHold(p);
+    const mediaT = (p.type === "video" && p.el)
+      ? (useHold && typeof p.holdTime === "number" ? p.holdTime : p.el.currentTime)
+      : 0;
     const smp = FACE.sampleAtTime(p.blur, mediaT);
     const cx = dx + smp.mx * dw;
     const cy = dy + smp.my * dh;
@@ -1980,12 +2146,14 @@
   }
 
   /**
-   * 動画ラスト2秒の「予約・LINE誘導エンドカード」（リール視聴スマホ特化・QRコードなし）
+   * 動画ラスト2秒の「予約・LINE誘導エンドカード」（中央空白ゼロ自動レイアウト＋任意ロゴ・画像サイズ指定対応）
    */
   function getEndCardCanvas(W, H, opt) {
     const g = getGeom();
     const th = theme();
-    const hasValidLogo = !!(state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0);
+    const hasEndLogo = !!(state.endCard.logo && state.endCard.logo.naturalWidth > 0 && state.endCard.logo.naturalHeight > 0);
+    const hasHeaderLogo = !!(!hasEndLogo && state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0);
+    const endLogoPx = clamp(Math.round(Number(state.endCard.logoSize) || END_LOGO_DEFAULT_PX), END_LOGO_MIN_PX, END_LOGO_MAX_PX);
     const areaText = (state.endCard.area || "").trim();
     const offerText = (state.endCard.offer || "").trim() ||
       (state.symptom ? `「${state.symptom}」のお悩みはお気軽にご相談ください` : "つらい痛み・姿勢のお悩みはお任せください");
@@ -1997,7 +2165,8 @@
       W, H, state.aspect, pro ? 1 : 0, opt && opt.noWatermark ? 1 : 0, fontEpoch,
       state.theme,
       state.theme === "custom" ? `${state.custom.bg},${state.custom.text},${state.custom.accent}` : "",
-      hasValidLogo ? (logoUrl || "1") : "0",
+      hasHeaderLogo ? (logoUrl || "1") : "0",
+      hasEndLogo ? `${state.endCard.logoStamp}:${endLogoPx}` : "0",
       clinicText, areaText, offerText, ctaText, discText
     ].join("\x1f");
 
@@ -2027,71 +2196,119 @@
     // ベース背景＋アクセント光彩
     c.fillStyle = th.bg;
     c.fillRect(0, 0, LW, LH);
-    const grad = c.createRadialGradient(LW / 2, LH * 0.42, 40, LW / 2, LH * 0.48, LW * 0.85);
+    const grad = c.createRadialGradient(LW / 2, LH * 0.46, 40, LW / 2, LH * 0.50, LW * 0.85);
     grad.addColorStop(0, "rgba(255,255,255,0.08)");
     grad.addColorStop(1, "rgba(0,0,0,0.22)");
     c.fillStyle = grad;
     c.fillRect(0, 0, LW, LH);
 
-    // 中央カード枠
+    // コンテンツ実寸からカード高さを自動計算し、ロゴ未設定時の中央空白をゼロ化＆ロゴ設定時は指定pxサイズで中央に配置
     const cardX = 56;
     const cardW = LW - 112;
-    const cardY = Math.round(LH * (isShort ? 0.08 : 0.14));
-    const cardH = Math.round(LH * (isShort ? 0.82 : 0.72));
-    c.fillStyle = "rgba(18,21,28,0.86)";
+    const padTop = Math.round(72 * kS);
+    const padBottom = Math.round(64 * kS);
+
+    let areaW = 0, areaH = 0, gapAfterArea = 0;
+    if (areaText) {
+      const sz = fit(c, "📍 " + areaText, cardW - 120, Math.round(44 * kS), 24, 700);
+      areaW = c.measureText("📍 " + areaText).width + 68;
+      areaH = sz + Math.round(32 * kS);
+      gapAfterArea = Math.round(36 * kS);
+    }
+
+    let hdrLogoW = 0, hdrLogoH = 0, gapAfterHdrLogo = 0;
+    if (hasHeaderLogo) {
+      const lh = Math.round(118 * kS);
+      hdrLogoW = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 300);
+      hdrLogoH = Math.max(1, Math.round(hdrLogoW / (state.logo.naturalWidth / state.logo.naturalHeight)));
+      gapAfterHdrLogo = Math.round(28 * kS);
+    }
+
+    const clinicSz = fit(c, clinicText, cardW - 96, Math.round(86 * kS), 38, 900);
+    const clinicH = Math.round(clinicSz * 1.12);
+    const gapToBar = Math.round(22 * kS);
+    const barH = 8;
+    const gapAfterBar = Math.round(42 * kS);
+
+    const boxW = cardW - 88;
+    const boxH = Math.round(166 * kS);
+    const gapAfterOffer = Math.round((hasEndLogo ? 42 : 48) * kS);
+
+    const btnW = cardW - 84;
+    const btnH = Math.round(130 * kS);
+    const gapToHint = Math.round(22 * kS);
+    const hintFontPx = Math.round(27 * kS);
+    const hintH = Math.round(34 * kS);
+
+    const nonLogoH = padTop + areaH + gapAfterArea + hdrLogoH + gapAfterHdrLogo +
+      clinicH + gapToBar + barH + gapAfterBar + boxH + gapAfterOffer +
+      btnH + gapToHint + hintH + padBottom;
+    const maxCardH = LH - (discText ? Math.round(140 * kS) : Math.round(104 * kS));
+
+    let endLogoW = 0, endLogoH = 0, gapAfterEndLogo = 0;
+    if (hasEndLogo) {
+      gapAfterEndLogo = Math.round(42 * kS);
+      const targetBox = endLogoPx * kS;
+      const availH = Math.max(80, maxCardH - nonLogoH - gapAfterEndLogo);
+      const maxW = cardW - 96;
+      const maxH = Math.min(targetBox, availH);
+      const nw = state.endCard.logo.naturalWidth;
+      const nh = state.endCard.logo.naturalHeight;
+      const sc = Math.min(targetBox / Math.max(nw, nh), maxW / nw, maxH / nh);
+      endLogoW = Math.max(1, Math.round(nw * sc));
+      endLogoH = Math.max(1, Math.round(nh * sc));
+    }
+
+    const cardH = nonLogoH + endLogoH + gapAfterEndLogo;
+    const cardY = Math.round((LH - cardH) / 2);
+
+    // 中央カード枠
+    c.fillStyle = "rgba(18,21,28,0.88)";
     rr(c, cardX, cardY, cardW, cardH, 42);
     c.fill();
     c.strokeStyle = th.accent;
     c.lineWidth = 4;
     c.stroke();
 
-    let curY = cardY + Math.round(92 * kS);
+    let curY = cardY + padTop;
 
-    // 地域・最寄り駅ピル
+    // 1. 地域・最寄り駅ピル
     if (areaText) {
-      const sz = fit(c, "📍 " + areaText, cardW - 120, Math.round(44 * kS), 24, 700);
-      const pw = c.measureText("📍 " + areaText).width + 68;
-      const ph = sz + Math.round(32 * kS);
+      const cy = curY + areaH / 2;
       c.fillStyle = "rgba(255,255,255,0.12)";
-      rr(c, LW / 2 - pw / 2, curY - ph / 2, pw, ph, ph / 2);
+      rr(c, LW / 2 - areaW / 2, curY, areaW, areaH, areaH / 2);
       c.fill();
       c.fillStyle = "#ffffff";
       c.textAlign = "center";
       c.textBaseline = "middle";
-      c.fillText("📍 " + areaText, LW / 2, curY + 2);
-      curY += Math.round(118 * kS);
-    } else {
-      curY += Math.round(34 * kS);
+      fit(c, "📍 " + areaText, cardW - 120, Math.round(44 * kS), 24, 700);
+      c.fillText("📍 " + areaText, LW / 2, cy + 2);
+      curY += areaH + gapAfterArea;
     }
 
-    // 院ロゴ（有効時）
-    if (hasValidLogo) {
-      const lh = Math.round(130 * kS);
-      const lw = Math.min(state.logo.naturalWidth / state.logo.naturalHeight * lh, 320);
-      const realH = lw / (state.logo.naturalWidth / state.logo.naturalHeight);
-      c.drawImage(state.logo, LW / 2 - lw / 2, curY - realH / 2, lw, realH);
-      curY += Math.round(126 * kS);
+    // 2. 院名横ロゴ（中央ロゴ未設定かつProロゴ設定時のみ上部に小さく表示）
+    if (hasHeaderLogo) {
+      c.drawImage(state.logo, LW / 2 - hdrLogoW / 2, curY, hdrLogoW, hdrLogoH);
+      curY += hdrLogoH + gapAfterHdrLogo;
     }
 
-    // 院名
+    // 3. 院名＋アクセント区切りバー
     c.fillStyle = "#ffffff";
     c.textAlign = "center";
     c.textBaseline = "middle";
-    fit(c, clinicText, cardW - 96, Math.round(88 * kS), 38, 900);
-    c.fillText(clinicText, LW / 2, curY);
-    curY += Math.round(78 * kS);
+    fit(c, clinicText, cardW - 96, Math.round(86 * kS), 38, 900);
+    c.fillText(clinicText, LW / 2, curY + clinicH / 2);
+    curY += clinicH + gapToBar;
 
-    // アクセント区切りバー
     c.fillStyle = th.accent;
-    rr(c, LW / 2 - 90, curY, 180, 8, 4);
+    rr(c, LW / 2 - 90, curY, 180, barH, 4);
     c.fill();
-    curY += Math.round(108 * kS);
+    curY += barH + gapAfterBar;
 
-    // 初回オファー・見出しボックス
-    const boxW = cardW - 88;
-    const boxH = Math.round(176 * kS);
+    // 4. 初回オファー・見出しボックス（長文オファーは「→」位置で自動2段組にして大きく視認性高く描画）
+    const offerCenterY = curY + boxH / 2;
     c.fillStyle = "rgba(255,255,255,0.08)";
-    rr(c, LW / 2 - boxW / 2, curY - boxH / 2, boxW, boxH, 26);
+    rr(c, LW / 2 - boxW / 2, curY, boxW, boxH, 26);
     c.fill();
     c.strokeStyle = "rgba(255,255,255,0.22)";
     c.lineWidth = 2;
@@ -2100,26 +2317,48 @@
     c.fillStyle = "#ffd966";
     c.textAlign = "center";
     c.textBaseline = "middle";
-    fit(c, offerText, boxW - 56, Math.round(54 * kS), 26, 900);
-    c.fillText(offerText, LW / 2, curY + 2);
+    const arrowIdx = offerText.length >= 20 ? offerText.indexOf("→") : -1;
+    if (arrowIdx > 2 && arrowIdx < offerText.length - 3) {
+      const topLine = offerText.slice(0, arrowIdx).trim();
+      const botLine = "→ " + offerText.slice(arrowIdx + 1).trim();
+      fit(c, topLine, boxW - 56, Math.round(38 * kS), 22, 700);
+      c.fillStyle = "rgba(255,255,255,0.88)";
+      c.fillText(topLine, LW / 2, offerCenterY - Math.round(30 * kS));
+      c.fillStyle = "#ffd966";
+      fit(c, botLine, boxW - 56, Math.round(50 * kS), 24, 900);
+      c.fillText(botLine, LW / 2, offerCenterY + Math.round(24 * kS));
+    } else {
+      fit(c, offerText, boxW - 56, Math.round(54 * kS), 26, 900);
+      c.fillText(offerText, LW / 2, offerCenterY + 2);
+    }
+    curY += boxH + gapAfterOffer;
 
-    // 下部 LINE / 予約誘導ボタン（スマホ視聴者がそのままプロフィールへ行けるデザイン）
-    const btnW = cardW - 84;
-    const btnH = Math.round(132 * kS);
-    const btnY = cardY + cardH - Math.round(190 * kS);
+    // 5. 任意挿入の中央ロゴ・画像（ユーザー指定の px サイズでアスペクト比を維持して描画）
+    if (hasEndLogo && endLogoW > 0 && endLogoH > 0) {
+      c.save();
+      c.imageSmoothingEnabled = true;
+      if ("imageSmoothingQuality" in c) c.imageSmoothingQuality = "high";
+      c.drawImage(state.endCard.logo, Math.round(LW / 2 - endLogoW / 2), Math.round(curY), endLogoW, endLogoH);
+      c.restore();
+      curY += endLogoH + gapAfterEndLogo;
+    }
+
+    // 6. LINE / 予約誘導ボタン（スマホ視聴者がそのままプロフィールへ行けるデザイン）
+    const btnCenterY = curY + btnH / 2;
     c.fillStyle = "#06c755";
-    rr(c, LW / 2 - btnW / 2, btnY - btnH / 2, btnW, btnH, btnH / 2);
+    rr(c, LW / 2 - btnW / 2, curY, btnW, btnH, btnH / 2);
     c.fill();
 
     c.fillStyle = "#ffffff";
     c.textAlign = "center";
     c.textBaseline = "middle";
     fit(c, ctaText, btnW - 72, Math.round(48 * kS), 26, 900);
-    c.fillText(ctaText, LW / 2, btnY + 2);
+    c.fillText(ctaText, LW / 2, btnCenterY + 2);
+    curY += btnH + gapToHint;
 
     c.fillStyle = "rgba(255,255,255,0.78)";
-    c.font = `700 ${Math.round(28 * kS)}px ${FONT}`;
-    c.fillText("▲ アイコンをタップしてプロフィールのリンクへ", LW / 2, btnY + btnH / 2 + Math.round(46 * kS));
+    c.font = `700 ${hintFontPx}px ${FONT}`;
+    c.fillText("▲ アイコンをタップしてプロフィールのリンクへ", LW / 2, curY + hintH / 2);
 
     if (discText) {
       c.fillStyle = "rgba(255,255,255,0.68)";
@@ -2130,7 +2369,7 @@
     if (!pro && !(opt && opt.noWatermark)) {
       c.fillStyle = "rgba(255,255,255,0.75)";
       c.font = `700 28px ${FONT}`;
-      c.fillText((CFG.WATERMARK_TEXT || "BAメーカー 無料版") + "（お試しプレビュー）", LW / 2, cardY - 26);
+      c.fillText((CFG.WATERMARK_TEXT || "BAメーカー 無料版") + "（お試しプレビュー）", LW / 2, Math.max(32, cardY - 24));
     }
 
     c.restore();
@@ -2354,6 +2593,7 @@
     }
     try {
       p.holdCanvas.getContext("2d").drawImage(p.el, 0, 0, cw, ch);
+      p.holdTime = p.el.currentTime || 0;
       p.hasHold = true;
     } catch (e) {}
   }
@@ -2765,9 +3005,6 @@
       refreshBlurStatusUI();
       setMsg("");
       markDirty();
-      if (state.faceBlur && p.blur.enabled) {
-        p.blur.trackPromise = runFaceTrack(which, false);
-      }
       if (type === "video") {
         if (state.autoSync && MOTION) {
           autoDetectPanel(which);
@@ -2776,6 +3013,9 @@
         }
       } else if (videos().length) {
         restartVideos();
+      }
+      if (state.faceBlur && p.blur.enabled) {
+        p.blur.trackPromise = runFaceTrack(which, false);
       }
     };
     if (isVideo) {
@@ -2789,10 +3029,14 @@
       mediaPool.appendChild(v);
       v.ondurationchange = () => refreshTrimUI();
       let loadedOnce = false;
-      v.onloadeddata = () => {
+      v.onloadeddata = async () => {
         if (loadedOnce) return;
         loadedOnce = true;
         v.onloadeddata = null;
+        if (!isFinite(v.duration) || v.duration <= 0) {
+          await seekTo(v, 1e7);
+          await seekTo(v, 0);
+        }
         done(v, "video");
       };
       v.onerror = () => {
@@ -2879,7 +3123,13 @@
 
   function setPlaying(on) {
     state.playing = on;
-    if (on) state.wipeManual = false;
+    if (on) {
+      state.wipeManual = false;
+      if (state.endCard.previewing) {
+        state.endCard.previewing = false;
+        refreshEndCardPreviewBtn();
+      }
+    }
     $("btnPlay").textContent = on ? "⏸ 停止" : "▶ 再生";
     clearLoopTimer();
     const vids = videos();
@@ -3027,7 +3277,7 @@
       const fb = hitFaceBlur(pt);
       if (fb) {
         blurRingUntil = Date.now() + 3000;
-        drag = { kind: "blur", which: fb.which, last: pt };
+        drag = { kind: "blur", which: fb.which, last: pt, moved: false };
         markDirty();
         pinch = null;
         return;
@@ -3089,6 +3339,7 @@
       if (p && bg && bg.dw > 0 && bg.dh > 0) {
         const dmx = (pt.x - drag.last.x) / bg.dw;
         const dmy = (pt.y - drag.last.y) / bg.dh;
+        if (Math.abs(dmx) > 0.0005 || Math.abs(dmy) > 0.0005) drag.moved = true;
         if (p.blur.mode === "fixed") {
           p.blur.fixedX = clamp(p.blur.fixedX + dmx, 0.03, 0.97);
           p.blur.fixedY = clamp(p.blur.fixedY + dmy, 0.03, 0.97);
@@ -3125,6 +3376,12 @@
   const endPtr = (e) => {
     const hadOverlayDrag = !!(drag && (drag.kind === "text" || drag.kind === "blur"));
     if (drag && drag.kind === "text" && drag.moved && pointers.size <= 1) saveSettings();
+    if (drag && drag.kind === "blur" && drag.moved && pointers.size <= 1) {
+      const p = state.panels[drag.which];
+      if (p && p.type === "video" && p.blur && (p.blur.mode === "patch" || p.blur.status === "fallback")) {
+        p.blur.trackPromise = runFaceTrack(drag.which, true);
+      }
+    }
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
     if (!pointers.size) drag = null;
@@ -3224,7 +3481,7 @@
       serializeBlurKey(b),
       serializeBlurKey(a),
       (mode === "video" && state.endCard.enabled)
-        ? `1|${state.endCard.area}|${state.endCard.offer}|${state.endCard.cta}`
+        ? `1|${state.endCard.area}|${state.endCard.offer}|${state.endCard.cta}|${state.endCard.logoStamp}|${state.endCard.logoSize}`
         : "0",
       state.textPos.symptom.dx, state.textPos.symptom.dy,
       state.textPos.age.dx, state.textPos.age.dy,
@@ -3277,10 +3534,10 @@
       }
     });
     if (jobs.length) {
-      setMsg("顔ぼかしの追従位置を準備しています…");
+      setMsg("顔・頭ぼかしの自動追従位置を準備しています…");
       await Promise.race([
         Promise.all(jobs),
-        new Promise((r) => setTimeout(r, 4500))
+        new Promise((r) => setTimeout(r, 35000))
       ]);
     }
   }
@@ -3953,7 +4210,13 @@
     $("btnRotateMarker").onclick = rotateSelectedMarker;
     $("btnClearMarkers").onclick = clearAllMarkers;
 
-    // ③ 動画ラスト2秒の予約・LINE誘導カット（リール特化・QRなし）
+    // ③ 動画ラスト2秒の予約・LINE誘導カット（中央ロゴ任意挿入＋画像サイズ指定対応）
+    const showEndCardLivePreview = () => {
+      if (state.endCard.enabled && !state.endCard.previewing) {
+        state.endCard.previewing = true;
+        refreshEndCardPreviewBtn();
+      }
+    };
     $("chkEndCard").onchange = (e) => {
       state.endCard.enabled = e.target.checked;
       if (!state.endCard.enabled) state.endCard.previewing = false;
@@ -3966,10 +4229,81 @@
     [["inEndArea", "area"], ["inEndOffer", "offer"], ["inEndCta", "cta"]].forEach(([id, key]) => {
       $(id).addEventListener("input", (e) => {
         state.endCard[key] = e.target.value;
+        showEndCardLivePreview();
         saveSettings();
         markDirty();
       });
     });
+    $("btnEndLogo").onclick = () => $("fileEndLogo").click();
+    $("fileEndLogo").onchange = (e) => {
+      const f = e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      if (!f.type.startsWith("image/")) {
+        setMsg("中央ロゴには画像ファイルを選んでください。", "err");
+        return;
+      }
+      const nextUrl = URL.createObjectURL(f);
+      const img = new Image();
+      img.onload = () => {
+        if (!img.naturalWidth || !img.naturalHeight) {
+          URL.revokeObjectURL(nextUrl);
+          setMsg("この画像はサイズを取得できませんでした（PNGまたはJPEGをお試しください）。", "err");
+          return;
+        }
+        if (state.endCard._objUrl) URL.revokeObjectURL(state.endCard._objUrl);
+        state.endCard._objUrl = nextUrl;
+        state.endCard.logo = img;
+        state.endCard.logoName = (f.name || "ロゴ画像").slice(0, 48);
+        state.endCard.logoDataUrl = compressEndLogoToDataUrl(img);
+        state.endCard.logoStamp++;
+        showEndCardLivePreview();
+        syncEndLogoUI();
+        if ($("inEndLogoSizeNum")) $("inEndLogoSizeNum").value = String(state.endCard.logoSize);
+        saveSettings();
+        setMsg("");
+        markDirty();
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(nextUrl);
+        setMsg("この画像は読み込めませんでした。", "err");
+      };
+      img.src = nextUrl;
+    };
+    $("btnEndLogoClear").onclick = () => {
+      clearEndLogo();
+      showEndCardLivePreview();
+    };
+    $("inEndLogoSize").addEventListener("input", (e) => {
+      const sz = clamp(Math.round(Number(e.target.value) || END_LOGO_DEFAULT_PX), END_LOGO_MIN_PX, END_LOGO_MAX_PX);
+      state.endCard.logoSize = sz;
+      if ($("inEndLogoSizeNum")) $("inEndLogoSizeNum").value = String(sz);
+      showEndCardLivePreview();
+      saveSettings();
+      markDirty();
+    });
+    const commitEndLogoSizeNum = (forceClampInput) => {
+      const numEl = $("inEndLogoSizeNum");
+      if (!numEl) return;
+      const raw = parseFloat(numEl.value);
+      if (!forceClampInput) {
+        if (!isFinite(raw) || raw < END_LOGO_MIN_PX || raw > END_LOGO_MAX_PX) return;
+      }
+      const sz = clamp(
+        Math.round(isFinite(raw) ? raw : (state.endCard.logoSize || END_LOGO_DEFAULT_PX)),
+        END_LOGO_MIN_PX,
+        END_LOGO_MAX_PX
+      );
+      state.endCard.logoSize = sz;
+      if ($("inEndLogoSize")) $("inEndLogoSize").value = String(sz);
+      if (forceClampInput) numEl.value = String(sz);
+      showEndCardLivePreview();
+      saveSettings();
+      markDirty();
+    };
+    $("inEndLogoSizeNum").addEventListener("input", () => commitEndLogoSizeNum(false));
+    $("inEndLogoSizeNum").addEventListener("change", () => commitEndLogoSizeNum(true));
+    $("inEndLogoSizeNum").addEventListener("blur", () => commitEndLogoSizeNum(true));
     $("btnPreviewEndCard").onclick = () => {
       state.endCard.previewing = !state.endCard.previewing;
       refreshEndCardPreviewBtn();
@@ -4100,9 +4434,15 @@
     };
 
     ["cBg", "cText", "cAccent"].forEach(id => $(id).addEventListener("input", (e) => {
+      if (isHex($("cBg").value)) state.custom.bg = $("cBg").value;
+      if (isHex($("cText").value)) state.custom.text = $("cText").value;
+      if (isHex($("cAccent").value)) state.custom.accent = $("cAccent").value;
       state.custom[{ cBg: "bg", cText: "text", cAccent: "accent" }[id]] = e.target.value;
+      state.theme = "custom";
+      state.preferredTheme = "custom";
       saveSettings();
       renderThemes();
+      refreshProTrialUI();
     }));
 
     Object.entries(TEXT_SLIDERS).forEach(([k, sliderId]) => {
@@ -4190,7 +4530,13 @@
     $("selAudio").onchange = () => refreshSnsUI();
 
     $("btnPlay").onclick = () => setPlaying(!state.playing);
-    $("btnRestart").onclick = restartVideos;
+    $("btnRestart").onclick = () => {
+      if (state.endCard.previewing) {
+        state.endCard.previewing = false;
+        refreshEndCardPreviewBtn();
+      }
+      restartVideos();
+    };
     $("chkGuide").onchange = (e) => { state.guide = e.target.checked; markDirty(); };
     $("btnPng").onclick = () => savePng();
     $("btnSave").onclick = () => runCurrentExport();

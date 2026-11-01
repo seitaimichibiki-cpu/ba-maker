@@ -32,7 +32,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);
 .card h2{font-size:15px;margin:0 0 10px}
 .card h3{font-size:13px;margin:0 0 8px}
 label{display:block;font-size:12px;color:var(--sub);margin-bottom:10px}
-input[type=text],input[type=email],select{width:100%;margin-top:4px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
+input[type=text],input[type=email],input[type=number],select{width:100%;margin-top:4px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);
   background:#0f1115;color:var(--text);font-size:16px;font-family:inherit}
 input[type=color]{width:100%;height:36px;border:1px solid var(--line);background:none;border-radius:8px;margin-top:4px}
 input[type=range]{width:100%}
@@ -100,9 +100,9 @@ hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 .pick small{font-size:11px;color:var(--sub);word-break:break-all;max-width:100%}
 .pick.done{border-style:solid;border-color:var(--ok)}
 .btn.big{display:block;width:100%;padding:16px;font-size:18px;border-radius:12px}
-.adv summary{cursor:pointer;font-weight:700;font-size:14px;margin-bottom:0}
-.adv[open] summary{margin-bottom:12px}
-.adv h3{margin:16px 0 8px;color:var(--sub)}
+.adv h3{margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--line);color:var(--text)}
+.adv h2+h3{margin-top:6px;padding-top:0;border-top:none}
+.adv .slot h3{margin:0 0 8px;padding-top:0;border-top:none}
 
 /* ---- 自動BGMバー ---- */
 .bgm-box{background:#12151b;border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:12px}
@@ -300,6 +300,18 @@ body.is-pro .pro-tag{background:rgba(53,194,138,.15);color:var(--ok);border-colo
 .posture-checks input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
 .marker-bar{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
 .marker-bar .btn.tiny{margin:0}
+
+.end-logo-box{margin:10px 0 8px;padding:10px 12px;background:#0f1218;border:1px solid var(--line);border-radius:10px}
+.end-logo-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;font-weight:700;color:var(--text);margin-bottom:8px}
+.end-logo-name{font-size:11.5px;font-weight:500;color:var(--sub);word-break:break-all}
+.end-logo-name.has-logo{color:var(--ok);font-weight:700}
+.end-logo-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.end-logo-actions .btn.tiny{margin:0}
+.end-logo-size-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.end-logo-size-label{font-size:12px;color:var(--sub);white-space:nowrap}
+.end-logo-size-row input[type=range]{flex:1;min-width:84px}
+.end-logo-num-wrap{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--sub)}
+.end-logo-num-wrap input[type=number]{width:74px;margin-top:0;padding:6px 8px;text-align:right;font-size:16px}
 
 .preset-box{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 .preset-head{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--text);margin-bottom:6px;flex-wrap:wrap}
