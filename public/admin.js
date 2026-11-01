@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CFG = window.APP_CONFIG || {};
+  const CFG = window.BAM_CONFIG || {};
   const LS_KEY = "bam_license";
   const LS_DEVICE = "bam_device_v1";
   const $ = (id) => document.getElementById(id);
@@ -393,8 +393,8 @@
   }
 
   // イベント登録
-  if (CFG.BRAND_NAME && $("brandName")) {
-    $("brandName").textContent = CFG.BRAND_NAME;
+  if (CFG.BRAND && $("brandName")) {
+    $("brandName").textContent = CFG.BRAND;
   }
 
   $("btnRefreshAdmin").addEventListener("click", () => loadDashboard(true));
