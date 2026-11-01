@@ -250,6 +250,7 @@ async function sendLicenseEmail(env, record) {
     `${brand} 有料プランにお申し込みいただきありがとうございます。`,
     "",
     "以下の「ワンタップ有効化リンク」を開くだけで、すぐにご利用いただけます。",
+    "（透かしなし・1080pフルHD・AI顔ぼかし追従・姿勢基準線＆スタンプ・ラスト2秒LINE誘導カット・上下分割／スライド比較・4:5／1:1サイズ切替・全テーマ＆院ロゴ）",
     `▼ ワンタップで有料プランを有効化する`,
     activateUrl,
     "",
@@ -271,7 +272,7 @@ async function sendLicenseEmail(env, record) {
   const htmlBody = `
 <div style="font-family:'Hiragino Sans','Noto Sans JP',Meiryo,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1a1a1a;line-height:1.7">
   <h2 style="margin:0 0 16px;font-size:20px;color:#111">🎬 ${escapeHtml(brand)} 有料プランへようこそ</h2>
-  <p style="margin:0 0 16px">有料プランにお申し込みいただきありがとうございます。<br>下のボタンを押すだけで、お使いの端末ですぐに<strong>有料プラン（透かしなし・1080×1920フルHD・ロゴ挿入・全テーマ）</strong>が有効になります。</p>
+  <p style="margin:0 0 16px">有料プランにお申し込みいただきありがとうございます。<br>下のボタンを押すだけで、お使いの端末ですぐに<strong>有料プラン（透かしなし・1080pフルHD・AI顔ぼかし追従・姿勢基準線＆注目スタンプ・ラスト2秒LINE誘導カット・上下分割／スライド比較・4:5／1:1サイズ切替・全テーマ＆院ロゴ）</strong>が有効になります。</p>
   <div style="text-align:center;margin:24px 0">
     <a href="${escapeHtml(activateUrl)}" style="display:inline-block;background:#ff5a5f;color:#ffffff;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:10px;font-size:16px">⭐ ワンタップで有料プランを有効化する</a>
   </div>

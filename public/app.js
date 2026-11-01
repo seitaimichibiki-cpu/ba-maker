@@ -1176,7 +1176,7 @@
     }
     const b = p.blur;
     const token = ++b.trackId;
-    const isCancelled = () => state.panels[which] !== p || b.trackId !== token;
+    const isCancelled = () => !Object.values(state.panels).includes(p) || b.trackId !== token;
 
     if (p.type === "image") {
       if (fromCurrentAnchor) {
@@ -3198,7 +3198,7 @@
   function serializeBlurKey(p) {
     if (!state.faceBlur || !p.blur || !p.blur.enabled) return "0";
     const b = p.blur;
-    return `${b.mode},${b.scale},${b.fixedX.toFixed(4)},${b.fixedY.toFixed(4)},${b.baseR.toFixed(4)},${(b.offsetX || 0).toFixed(4)},${(b.offsetY || 0).toFixed(4)},${b.keyframes.length},${b.status}`;
+    return `${b.trackId},${b.mode},${b.scale},${b.fixedX.toFixed(4)},${b.fixedY.toFixed(4)},${b.baseR.toFixed(4)},${(b.offsetX || 0).toFixed(4)},${(b.offsetY || 0).toFixed(4)},${b.keyframes.length},${b.status}`;
   }
   function exportSignature(modeOverride) {
     const mode = modeOverride || currentExportMode();
@@ -3357,6 +3357,10 @@
       }
     }
 
+    if (state.endCard.previewing) {
+      state.endCard.previewing = false;
+      refreshEndCardPreviewBtn();
+    }
     state.exporting = true;
     vids.forEach(p => { if (p.el) p.el.pause(); });
     $("btnSave").disabled = true; $("btnPng").disabled = true;
@@ -3372,17 +3376,17 @@
       }
       await ensureFaceTrackingReady();
 
-      const { w, h } = exportSize();
-      const maxSec = lim().maxSeconds;
-      const sig = exportSignature("video");
-      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
-      const cctx = cv.getContext("2d", { alpha: false });
-
       const pendingScans = vids.map(p => p.scanning && p.scanPromise).filter(Boolean);
       if (pendingScans.length) {
         setMsg("動き始めの位置を解析しています…");
         await Promise.all(pendingScans);
       }
+
+      const { w, h } = exportSize();
+      const maxSec = lim().maxSeconds;
+      const sig = exportSignature("video");
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      const cctx = cv.getContext("2d", { alpha: false });
 
       let baseDur;
       if (vids.length) {
