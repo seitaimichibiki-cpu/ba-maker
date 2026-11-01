@@ -4245,6 +4245,52 @@
     $("inKey").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); doActivate(); }
     });
+
+    const doRecoverKey = async () => {
+      const emailInput = $("inRecoverEmail");
+      const msgEl = $("recoverMsg");
+      const btn = $("btnRecoverKey");
+      if (!emailInput || !msgEl || !btn) return;
+      const email = emailInput.value.trim();
+      msgEl.hidden = false;
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        msgEl.textContent = "購入時にご登録のメールアドレスを正しく入力してください。";
+        msgEl.className = "msg err";
+        return;
+      }
+      if (!apiBase()) {
+        msgEl.textContent = "現在メール自動再送サーバーに接続できません。公式LINE窓口へお問い合わせください。";
+        msgEl.className = "msg err";
+        return;
+      }
+      btn.disabled = true;
+      msgEl.textContent = "ご登録情報を確認してメールを送信しています…";
+      msgEl.className = "msg";
+      try {
+        const res = await postLicenseApi("/api/recover-key", { email }, 10000);
+        const d = res.data || {};
+        if (res.okHttp && d.ok) {
+          emailInput.value = "";
+          msgEl.textContent = d.message || "ご登録メールアドレス宛にライセンスキーと有効化リンクを再送しました。";
+          msgEl.className = "msg ok";
+        } else {
+          msgEl.textContent = d.message || "再送手続きに失敗しました。しばらく時間をおいて再度お試しください。";
+          msgEl.className = "msg err";
+        }
+      } catch (e) {
+        msgEl.textContent = "通信エラーが発生しました。電波状況をご確認のうえ再度お試しください。";
+        msgEl.className = "msg err";
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    if ($("btnRecoverKey")) $("btnRecoverKey").onclick = doRecoverKey;
+    if ($("inRecoverEmail")) {
+      $("inRecoverEmail").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); doRecoverKey(); }
+      });
+    }
+
     $("btnToggleKey").onclick = () => {
       showFullKey = !showFullKey;
       syncModalView();

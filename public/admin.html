@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="style.css?v=17">
+<link rel="stylesheet" href="style.css?v=18">
 </head>
 <body>
 
@@ -126,7 +126,7 @@
         <button type="button" class="adm-tab" data-filter="inactive">⚪ 解約・停止</button>
       </div>
       <div class="adm-search-row">
-        <input type="search" id="inAdmSearch" placeholder="メール・キー・院名メモで検索">
+        <input type="search" id="inAdmSearch" placeholder="顧客名・メール・キー・院名メモで検索">
       </div>
     </div>
 
@@ -136,13 +136,13 @@
 
   <!-- 5. 決済・自動利用停止・管理操作のイベント履歴（監査ログ） -->
   <section class="card">
-    <h2>🕒 直近の決済・自動利用停止・管理イベント履歴（最新80件）</h2>
-    <p class="hint" style="margin:0 0 10px">Stripeでの新規決済・カード決済失敗による自動利用停止・再決済による自動再開・解約・手動操作の履歴が時系列で記録されます。</p>
+    <h2>🕒 直近の決済・自動利用停止・キー再送・管理イベント履歴（最新80件）</h2>
+    <p class="hint" style="margin:0 0 10px">Stripeでの新規決済（顧客名自動取得）・カード決済失敗による自動利用停止・再決済による自動再開・ユーザー自身のキー再送・解約・手動操作の履歴が時系列で記録されます。</p>
     <div id="admLogList" class="adm-logs"></div>
   </section>
 </main>
 
-<script src="config.js?v=17"></script>
-<script src="admin.js?v=19"></script>
+<script src="config.js?v=18"></script>
+<script src="admin.js?v=20"></script>
 </body>
 </html>

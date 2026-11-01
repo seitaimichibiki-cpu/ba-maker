@@ -160,6 +160,7 @@
       payment_recovered: "✅ 再決済→自動再開",
       subscription_canceled: "⚪ 解約完了→自動停止",
       subscription_updated: "🔄 契約状態変更",
+      self_recover: "📩 セルフキー再送",
       admin_issue: "🎁 手動キー発行",
       admin_revoke: "⏸ 手動利用停止",
       admin_reactivate: "▶ 手動再有効化",
@@ -189,6 +190,7 @@
       { ok: !!sys.webhookSecretConfigured, text: "Stripe Webhook署名検証" },
       { ok: !!sys.autoSuspendOnPaymentFailure, text: "決済失敗時の自動利用停止：有効" },
       { ok: !!sys.autoRecoverOnInvoicePaid, text: "再決済時の自動復旧：有効" },
+      { ok: !!sys.selfKeyRecoveryEnabled, text: "セルフキー再送（メアド認証）：有効" },
       { ok: !!sys.emailConfigured, text: "Gmail自動メール送信" },
       { ok: !!sys.stripeSecretConfigured, text: "決済直後0秒有効化API" }
     ];
@@ -215,7 +217,7 @@
       if (currentFilter === "manual" && cat !== "manual" && cat !== "owner") return false;
       if (currentFilter === "inactive" && cat !== "inactive") return false;
       if (!q) return true;
-      const hay = `${r.key} ${r.email || ""} ${r.note || ""} ${r.customerId || ""} ${r.subscriptionId || ""}`.toLowerCase();
+      const hay = `${r.key} ${r.customerName || ""} ${r.email || ""} ${r.note || ""} ${r.customerId || ""} ${r.subscriptionId || ""}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -269,6 +271,7 @@
         </div>
 
         <div class="adm-meta-grid">
+          <div><span>顧客名（決済名義）：</span><strong>${r.customerName ? esc(r.customerName) : "—"}</strong></div>
           <div><span>メール：</span><strong>${r.email ? esc(r.email) : "（未設定）"}</strong></div>
           <div><span>院名・メモ：</span><strong>${r.note ? esc(r.note) : "—"}</strong></div>
           <div><span>端末登録：</span><strong>${r.deviceCount} / ${r.maxDevices} 台</strong></div>
@@ -281,7 +284,7 @@
         <div class="adm-actions">
           <button type="button" class="btn tiny" data-act="copy-key" data-key="${esc(r.key)}">📋 キーをコピー</button>
           <button type="button" class="btn tiny" data-act="copy-url" data-url="${esc(r.activateUrl)}">🔗 ワンタップ有効化URLをコピー</button>
-          <button type="button" class="btn tiny" data-act="toggle-edit" data-key="${esc(r.key)}">📝 メモ・宛先・台数編集</button>
+          <button type="button" class="btn tiny" data-act="toggle-edit" data-key="${esc(r.key)}">📝 顧客名・メモ・宛先・台数編集</button>
           <button type="button" class="btn tiny" data-act="resend" data-key="${esc(r.key)}" data-email="${esc(r.email || "")}">✉️ メール再送</button>
           ${devs.length > 0 ? `<button type="button" class="btn tiny" data-act="reset-devs" data-key="${esc(r.key)}" data-owner="${r.isOwnerAdmin ? "1" : "0"}">📱 ${r.isOwnerAdmin ? "他端末をリセット" : "端末枠リセット"}</button>` : ""}
           ${canToggleStatus ? (
@@ -294,6 +297,9 @@
 
         <div class="adm-edit-box" id="edit_${esc(r.key)}" ${isEditing ? "" : "hidden"}>
           <div class="adm-edit-grid">
+            <label>顧客名（決済名義）
+              <input type="text" id="edName_${esc(r.key)}" value="${esc(r.customerName || "")}" maxlength="100" placeholder="TARO YAMADA / 山田太郎">
+            </label>
             <label>メールアドレス
               <input type="email" id="edMail_${esc(r.key)}" value="${esc(r.email || "")}" placeholder="clinic@example.com">
             </label>
@@ -363,7 +369,7 @@
 
   function exportCsv() {
     const rows = (dashData && Array.isArray(dashData.records)) ? dashData.records : [];
-    const header = ["ステータス", "区分", "ライセンスキー", "メールアドレス", "院名・メモ", "登録端末数", "上限台数", "メール送信日時", "決済失敗日時", "発行日時"];
+    const header = ["ステータス", "区分", "ライセンスキー", "顧客名（決済名義）", "メールアドレス", "院名・メモ", "登録端末数", "上限台数", "メール送信日時", "決済失敗日時", "発行日時"];
     const escCsv = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
     const lines = [header.map(escCsv).join(",")];
     for (const r of rows) {
@@ -371,6 +377,7 @@
         badgeInfo(r).label,
         r.isOwnerAdmin ? "管理者" : (r.isStripe ? "Stripe定期課金" : "手動発行"),
         r.key,
+        r.customerName || "",
         r.email || "",
         r.note || "",
         r.deviceCount,
@@ -445,6 +452,7 @@
           activateUrl: res.data.activateUrl,
           isOwnerAdmin: false,
           isStripe: false,
+          customerName: issuedRec.customerName || "",
           email: issuedRec.email || "",
           note: issuedRec.note || "",
           status: issuedRec.status || "active",
@@ -526,11 +534,12 @@
       return;
     }
     if (act === "save-edit") {
+      const customerName = ($("edName_" + key) && $("edName_" + key).value.trim()) || "";
       const email = ($("edMail_" + key) && $("edMail_" + key).value.trim()) || "";
       const note = ($("edNote_" + key) && $("edNote_" + key).value.trim()) || "";
       const maxDevices = Number(($("edMax_" + key) && $("edMax_" + key).value) || 2);
       btn.disabled = true;
-      const res = await callAdminApi({ action: "update", key, email, note, maxDevices });
+      const res = await callAdminApi({ action: "update", key, customerName, email, note, maxDevices });
       btn.disabled = false;
       if (res.unauthorized) { denyAndRedirect(); return; }
       if (!res.okHttp) {

@@ -21,7 +21,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="style.css?v=17">
+<link rel="stylesheet" href="style.css?v=18">
 </head>
 <body>
 
@@ -414,6 +414,18 @@
           <button id="btnActivate" class="btn">有効化</button>
         </div>
         <p id="keyMsg" class="msg"></p>
+
+        <details id="recoverDetails" class="recover-details">
+          <summary>📩 ライセンスキーを忘れた方（メールで再送）</summary>
+          <div class="recover-body">
+            <p class="hint" style="margin:0 0 8px">購入時にご入力いただいたメールアドレス宛に、ライセンスキーとワンタップ有効化リンクを再送します。</p>
+            <div class="key-row">
+              <input id="inRecoverEmail" type="email" maxlength="120" placeholder="購入時のメールアドレス" autocomplete="email">
+              <button type="button" id="btnRecoverKey" class="btn">再送する</button>
+            </div>
+            <p id="recoverMsg" class="msg" hidden></p>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -456,10 +468,10 @@
   </div>
 </div>
 
-<script src="config.js?v=17"></script>
-<script src="bgm.js?v=17"></script>
-<script src="motion.js?v=17"></script>
-<script src="face.js?v=17"></script>
-<script src="app.js?v=17"></script>
+<script src="config.js?v=18"></script>
+<script src="bgm.js?v=18"></script>
+<script src="motion.js?v=18"></script>
+<script src="face.js?v=18"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>

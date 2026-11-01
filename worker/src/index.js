@@ -298,7 +298,21 @@ async function findRecordByStripeIds(env, { sessionId, subscriptionId, customerI
   return null;
 }
 
-async function issueOrGetLicense(env, { sessionId, customerId, subscriptionId, email, maxDevices }) {
+function extractStripeCustomerName(obj) {
+  if (!obj) return "";
+  const fromCustom = Array.isArray(obj.custom_fields)
+    ? obj.custom_fields.map((f) => (f && f.text && f.text.value) || "").find(Boolean)
+    : "";
+  const raw = fromCustom
+    || (obj.customer_details && obj.customer_details.name)
+    || obj.customer_name
+    || (obj.shipping_details && obj.shipping_details.name)
+    || "";
+  return String(raw || "").trim().slice(0, 100);
+}
+
+async function issueOrGetLicense(env, { sessionId, customerId, subscriptionId, email, customerName, maxDevices }) {
+  const cleanName = String(customerName || "").trim().slice(0, 100);
   let existing = await findRecordByStripeIds(env, { sessionId, subscriptionId });
   if (!existing && customerId) {
     const byCus = await findRecordByStripeIds(env, { customerId });
@@ -312,7 +326,8 @@ async function issueOrGetLicense(env, { sessionId, customerId, subscriptionId, e
     if (sessionId && existing.checkoutSessionId !== sessionId) { existing.checkoutSessionId = sessionId; changed = true; }
     if (subscriptionId && existing.subscriptionId !== subscriptionId) { existing.subscriptionId = subscriptionId; changed = true; }
     if (customerId && !existing.customerId) { existing.customerId = customerId; changed = true; }
-    if (email && !existing.email) { existing.email = email; changed = true; }
+    if (email && !existing.email) { existing.email = String(email).trim(); changed = true; }
+    if (cleanName && !existing.customerName) { existing.customerName = cleanName; changed = true; }
     if (existing.status !== "active") {
       existing.status = "active";
       existing.revokedReason = null;
@@ -335,6 +350,7 @@ async function issueOrGetLicense(env, { sessionId, customerId, subscriptionId, e
   const record = {
     key,
     email: String(email || "").trim(),
+    customerName: cleanName,
     customerId: customerId || null,
     subscriptionId: subscriptionId || null,
     checkoutSessionId: sessionId || null,
@@ -361,7 +377,9 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-async function sendLicenseEmail(env, record) {
+async function sendLicenseEmail(env, record, opts) {
+  opts = opts || {};
+  const isRecovery = !!opts.isRecovery;
   if (!record.email) return { sent: false, reason: "no_email" };
   const brand = env.BRAND_NAME || "BAメーカー";
   const baseAppUrl = String(env.APP_URL || "https://seitaimichibiki-cpu.github.io/ba-maker/").replace(/\?.*$/, "");
@@ -371,10 +389,16 @@ async function sendLicenseEmail(env, record) {
   const maxDev = getMaxDevices(env, record);
   const lineUrl = String(env.LINE_CONTACT_URL || "https://lin.ee/XB6R3kS").trim();
 
-  const subject = `【${brand}】有料プランのライセンスキーをお届けします`;
+  const subject = isRecovery
+    ? `【${brand}】ライセンスキー再送のご案内`
+    : `【${brand}】有料プランのライセンスキーをお届けします`;
+
+  const leadText = isRecovery
+    ? `${brand} をご利用いただきありがとうございます。ご登録メールアドレス宛にライセンスキーを再送いたします。`
+    : `${brand} 有料プランにお申し込みいただきありがとうございます。`;
 
   const textBody = [
-    `${brand} 有料プランにお申し込みいただきありがとうございます。`,
+    leadText,
     "",
     "以下の「ワンタップ有効化リンク」を開くだけで、すぐにご利用いただけます。",
     "（透かしなし・1080pフルHD・AI顔ぼかし追従・姿勢基準線＆スタンプ・ラスト2秒LINE誘導カット・上下分割／スライド比較・4:5／1:1サイズ切替・全テーマ＆院ロゴ）",
@@ -396,10 +420,14 @@ async function sendLicenseEmail(env, record) {
     `今後とも ${brand} をよろしくお願いいたします。`
   ].filter((line, idx, arr) => !(line === "" && arr[idx - 1] === "")).join("\n");
 
+  const htmlHeading = isRecovery
+    ? `🔑 ${escapeHtml(brand)} ライセンスキー再送のご案内`
+    : `🎬 ${escapeHtml(brand)} 有料プランへようこそ`;
+
   const htmlBody = `
 <div style="font-family:'Hiragino Sans','Noto Sans JP',Meiryo,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1a1a1a;line-height:1.7">
-  <h2 style="margin:0 0 16px;font-size:20px;color:#111">🎬 ${escapeHtml(brand)} 有料プランへようこそ</h2>
-  <p style="margin:0 0 16px">有料プランにお申し込みいただきありがとうございます。<br>下のボタンを押すだけで、お使いの端末ですぐに<strong>有料プラン（透かしなし・1080pフルHD・AI顔ぼかし追従・姿勢基準線＆注目スタンプ・ラスト2秒LINE誘導カット・上下分割／スライド比較・4:5／1:1サイズ切替・全テーマ＆院ロゴ）</strong>が有効になります。</p>
+  <h2 style="margin:0 0 16px;font-size:20px;color:#111">${htmlHeading}</h2>
+  <p style="margin:0 0 16px">${escapeHtml(leadText)}<br>下のボタンを押すだけで、お使いの端末ですぐに<strong>有料プラン（透かしなし・1080pフルHD・AI顔ぼかし追従・姿勢基準線＆注目スタンプ・ラスト2秒LINE誘導カット・上下分割／スライド比較・4:5／1:1サイズ切替・全テーマ＆院ロゴ）</strong>が有効になります。</p>
   <div style="text-align:center;margin:24px 0">
     <a href="${escapeHtml(activateUrl)}" style="display:inline-block;background:#ff5a5f;color:#ffffff;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:10px;font-size:16px">⭐ ワンタップで有料プランを有効化する</a>
   </div>
@@ -664,11 +692,13 @@ export default {
           return jsonResp({ ok: true, ignored: "other_product_checkout" }, 200, env, request);
         }
         const email = (obj.customer_details && obj.customer_details.email) || obj.customer_email || "";
+        const customerName = extractStripeCustomerName(obj);
         const record = await issueOrGetLicense(env, {
           sessionId: obj.id,
           customerId: obj.customer,
           subscriptionId: obj.subscription,
-          email
+          email,
+          customerName
         });
         let sentNow = false;
         if (!record.emailSentAt && record.email) {
@@ -679,11 +709,12 @@ export default {
             sentNow = true;
           }
         }
+        const namePart = record.customerName ? `（${record.customerName}）` : "";
         await appendAuditLog(env, {
           type: "checkout_completed",
           key: record.key,
           email: record.email,
-          detail: sentNow ? "Stripe決済完了・キー自動発行＆案内メール送信" : "Stripe決済完了・キー発行確認"
+          detail: sentNow ? `Stripe決済完了${namePart}・キー自動発行＆案内メール送信` : `Stripe決済完了${namePart}・キー発行確認`
         });
         return jsonResp({ ok: true, handled: type, key: maskKey(record.key) }, 200, env, request);
       }
@@ -737,6 +768,12 @@ export default {
           customerId: obj.customer
         });
         if (record && (!record.subscriptionId || !subId || record.subscriptionId === subId)) {
+          if (!record.customerName && obj.customer_name) {
+            record.customerName = String(obj.customer_name).trim().slice(0, 100);
+          }
+          if (!record.email && obj.customer_email) {
+            record.email = String(obj.customer_email).trim().slice(0, 120);
+          }
           record.status = "inactive";
           record.revokedReason = "payment_failed";
           record.paymentFailedAt = new Date().toISOString();
@@ -758,6 +795,12 @@ export default {
           customerId: obj.customer
         });
         if (record && (!record.subscriptionId || !subId || record.subscriptionId === subId)) {
+          if (!record.customerName && obj.customer_name) {
+            record.customerName = String(obj.customer_name).trim().slice(0, 100);
+          }
+          if (!record.email && obj.customer_email) {
+            record.email = String(obj.customer_email).trim().slice(0, 120);
+          }
           const wasPaymentFailed = record.revokedReason === "payment_failed";
           record.lastPaidAt = new Date().toISOString();
           if (wasPaymentFailed) {
@@ -840,11 +883,13 @@ export default {
           const sess = await sResp.json();
           if (sess && isBaMakerCheckoutSession(env, sess) && (sess.payment_status === "paid" || sess.status === "complete")) {
             const email = (sess.customer_details && sess.customer_details.email) || sess.customer_email || "";
+            const customerName = extractStripeCustomerName(sess);
             record = await issueOrGetLicense(env, {
               sessionId: sess.id,
               customerId: sess.customer,
               subscriptionId: sess.subscription,
-              email
+              email,
+              customerName
             });
             if (!record.emailSentAt && record.email) {
               const mailRes = await sendLicenseEmail(env, record);
@@ -863,6 +908,73 @@ export default {
 
       const result = await checkAndBindDevice(env, record, body.deviceId, body.deviceLabel);
       return jsonResp(result, result.ok ? 200 : 403, env, request);
+    }
+
+    // 4-2. ライセンスキーを忘れた方用のセルフメール再送（登録メアド宛のみ送信・メールアドレス探索防止＆レート制限付き）
+    if (request.method === "POST" && path === "/api/recover-key") {
+      if (!isAllowedBrowserOrigin(env, request)) {
+        return jsonResp({ ok: false, error: "ForbiddenOrigin", message: "許可されていないアクセス元です。" }, 403, env, request);
+      }
+      const rawEmail = String(body.email || "").trim().toLowerCase();
+      if (!rawEmail || rawEmail.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+        return jsonResp({ ok: false, code: "INVALID_EMAIL", message: "購入時にご登録のメールアドレスを正しく入力してください。" }, 400, env, request);
+      }
+
+      const clientIp = String(request.headers.get("CF-Connecting-IP") || "local").slice(0, 64);
+      const ipKey = `rl:recover_ip:${clientIp}`;
+      let ipCount = 0;
+      try {
+        ipCount = parseInt(await env.LICENSES.get(ipKey) || "0", 10) || 0;
+      } catch (e) {}
+      if (ipCount >= 6) {
+        return jsonResp({
+          ok: false,
+          code: "RATE_LIMITED",
+          message: "短時間に送信が集中しています。15分ほど時間をおいてからお試しください。"
+        }, 429, env, request);
+      }
+      try {
+        await env.LICENSES.put(ipKey, String(ipCount + 1), { expirationTtl: 900 });
+      } catch (e) {}
+
+      const genericMsg = "ご入力のメールアドレスに有効なご契約がある場合、ライセンスキーと有効化リンクをメールでお送りしました（数分経っても届かない場合は迷惑メールフォルダをご確認いただくか、購入時のメールアドレスをご確認ください）。";
+      const mailCooldownKey = `rl:recover_mail:${rawEmail}`;
+      try {
+        const cooled = await env.LICENSES.get(mailCooldownKey);
+        if (cooled) {
+          return jsonResp({ ok: true, message: genericMsg }, 200, env, request);
+        }
+      } catch (e) {}
+
+      const all = await listAllLicenseRecords(env);
+      const matched = all.find((r) =>
+        r &&
+        r.status === "active" &&
+        !isAdminLicenseRecord(env, r) &&
+        String(r.email || "").trim().toLowerCase() === rawEmail
+      );
+
+      try {
+        await env.LICENSES.put(mailCooldownKey, "1", { expirationTtl: 180 });
+      } catch (e) {}
+
+      if (matched) {
+        const mailRes = await sendLicenseEmail(env, matched, { isRecovery: true });
+        if (mailRes.sent) {
+          matched.emailSentAt = new Date().toISOString();
+          await saveLicenseRecord(env, matched);
+        }
+        await appendAuditLog(env, {
+          type: "self_recover",
+          key: matched.key,
+          email: matched.email,
+          detail: mailRes.sent
+            ? "ユーザー操作によりキー再送メールを自動送信"
+            : `ユーザーのキー再送操作（送信失敗: ${mailRes.reason || "error"}）`
+        });
+      }
+
+      return jsonResp({ ok: true, message: genericMsg }, 200, env, request);
     }
 
     // 5. 管理者用API（CLI用 Bearer ADMIN_SECRET または 管理者ライセンスキー＋端末認証の両対応）
@@ -931,6 +1043,7 @@ export default {
             activateUrl: `${baseAppUrl}${appSep}?key=${encodeURIComponent(r.key)}`,
             isOwnerAdmin,
             isStripe,
+            customerName: r.customerName || "",
             email: r.email || "",
             note: r.note || "",
             status: r.status || "inactive",
@@ -968,6 +1081,7 @@ export default {
             defaultMaxDevices: getMaxDevices(env, null),
             autoSuspendOnPaymentFailure: true,
             autoRecoverOnInvoicePaid: true,
+            selfKeyRecoveryEnabled: true,
             emailConfigured: Boolean(env.GAS_WEBHOOK_URL || env.RESEND_API_KEY || env.SENDGRID_API_KEY),
             stripeSecretConfigured: Boolean(env.STRIPE_SECRET_KEY),
             webhookSecretConfigured: Boolean(env.STRIPE_WEBHOOK_SECRET),
@@ -993,6 +1107,7 @@ export default {
           : getMaxDevices(env, null);
         const record = {
           key,
+          customerName: String(body.customerName || "").trim().slice(0, 100),
           email: String(body.email || "").trim().slice(0, 120),
           customerId: null,
           subscriptionId: null,
@@ -1021,7 +1136,7 @@ export default {
           type: "admin_issue",
           key: record.key,
           email: record.email,
-          detail: `手動発行（上限${maxDev}台${record.note ? " / " + record.note : ""}${mailRes.sent ? " / メール送信済" : ""}）`
+          detail: `手動発行（上限${maxDev}台${record.customerName ? " / " + record.customerName : ""}${record.note ? " / " + record.note : ""}${mailRes.sent ? " / メール送信済" : ""}）`
         });
         return jsonResp({
           ok: true,
@@ -1101,6 +1216,9 @@ export default {
         return jsonResp({ ok: true, record }, 200, env, request);
       }
       if (action === "update") {
+        if (typeof body.customerName === "string") {
+          record.customerName = body.customerName.trim().slice(0, 100);
+        }
         if (typeof body.note === "string") {
           record.note = body.note.trim().slice(0, 100);
         }
@@ -1121,7 +1239,7 @@ export default {
           type: "admin_update",
           key: record.key,
           email: record.email,
-          detail: `契約情報を更新（上限${record.maxDevices}台${record.note ? " / " + record.note : ""}）`
+          detail: `契約情報を更新（上限${record.maxDevices}台${record.customerName ? " / " + record.customerName : ""}${record.note ? " / " + record.note : ""}）`
         });
         return jsonResp({ ok: true, record }, 200, env, request);
       }
