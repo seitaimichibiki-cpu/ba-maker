@@ -628,13 +628,17 @@
       if (el && lineUrl) el.href = lineUrl;
     });
 
+    const isOwnerAdmin = Boolean(pro && licMeta && licMeta.isAdmin);
+    if ($("btnAdminPage")) $("btnAdminPage").hidden = !isOwnerAdmin;
+    if ($("btnModalAdminPage")) $("btnModalAdminPage").hidden = !isOwnerAdmin;
+
     if (pro) {
       const maxD = (licMeta && licMeta.maxDevices) || CFG.MAX_DEVICES || 2;
       const curD = (licMeta && licMeta.deviceCount) || 1;
       const rawSaved = normKey(localStorage.getItem(LS_KEY) || "");
-      $("proStatusBadge").textContent = (licMeta && licMeta.cancelAtPeriodEnd)
-        ? "有効（期間終了で自動終了）"
-        : "有効（認証済み）";
+      $("proStatusBadge").textContent = isOwnerAdmin
+        ? "有効（管理者ライセンス）"
+        : ((licMeta && licMeta.cancelAtPeriodEnd) ? "有効（期間終了で自動終了）" : "有効（認証済み）");
       $("proKeyMasked").textContent = (showFullKey && rawSaved)
         ? rawSaved
         : ((licMeta && licMeta.maskedKey) || maskKeyLocal(rawSaved));
@@ -693,6 +697,7 @@
 
   function buildMetaFromApi(key, data) {
     return {
+      isAdmin: !!(data && data.isAdmin),
       maskedKey: (data && data.maskedKey) || maskKeyLocal(key),
       deviceCount: (data && data.deviceCount) || 1,
       maxDevices: (data && data.maxDevices) || CFG.MAX_DEVICES || 2,

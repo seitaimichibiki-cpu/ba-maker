@@ -170,7 +170,7 @@ cd public && python3 -m http.server 8000
 
 ## ファイル構成
 
-- `public/` … 公開サイト本体（`index.html` / `style.css` / `app.js` / `face.js` / `bgm.js` / `motion.js` / `config.js` / `ogp.png` / `help.html` / `help.js` / `privacy.html` / `terms.html` / `tokushoho.html`）
+- `public/` … 公開サイト本体（`index.html` / `style.css` / `app.js` / `face.js` / `bgm.js` / `motion.js` / `config.js` / `ogp.png` / `admin.html` / `admin.js` / `help.html` / `help.js` / `privacy.html` / `terms.html` / `tokushoho.html`）
 - `gas/Code.gs` … 独自ドメイン不要の自動メール送信リレー（`seitaimichibiki@gmail.com` ＋ Google Apps Script 用）
 - `worker/` … 自動ライセンス発行・メール送信・2台制限・解約自動遮断サーバー（Cloudflare Workers + KV）
 - `tools/admin_license.js` … 管理者向けライセンス操作CLI（発行・再送・端末枠リセット・停止）

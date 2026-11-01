@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>管理者ページ｜BAメーカー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="style.css?v=17">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🛡 <span id="brandName">BAメーカー</span><small>管理者コンソール</small></div>
+  <div class="topbar-right">
+    <button type="button" id="btnRefreshAdmin" class="btn small" hidden>🔄 最新状態に更新</button>
+    <a href="index.html" class="btn small" style="text-decoration:none">← エディタに戻る</a>
+  </div>
+</header>
+
+<!-- サーバー側で管理者ライセンス認証が完了するまで本体UIは一切表示しない -->
+<div id="adminGate" class="adm-gate">
+  <div class="card">
+    <p id="adminGateMsg" style="margin:0;font-size:14px;color:var(--sub)">🔐 管理者ライセンスの認証状態を確認しています…</p>
+  </div>
+</div>
+
+<main id="adminApp" class="adm-wrap" hidden>
+  <div class="adm-head-row">
+    <div>
+      <h1>🛡 契約・ライセンス・決済管理</h1>
+      <p class="adm-sub">管理者専用ライセンスで認証中の端末からのみ閲覧・操作できます。</p>
+    </div>
+    <p id="adminLastSync" class="adm-sub"></p>
+  </div>
+
+  <!-- 1. リアルタイムKPIサマリー -->
+  <section class="adm-kpis" aria-label="契約サマリー">
+    <div class="adm-kpi ok">
+      <div class="adm-kpi-label">🟢 課金中の有料契約</div>
+      <div id="kpiPaidCount" class="adm-kpi-val">0件</div>
+      <div id="kpiMrr" class="adm-kpi-note">想定月額売上：¥0 / 月</div>
+    </div>
+    <div id="kpiFailedCard" class="adm-kpi">
+      <div class="adm-kpi-label">⚠️ 決済失敗（自動停止中）</div>
+      <div id="kpiFailedCount" class="adm-kpi-val">0件</div>
+      <div class="adm-kpi-note">再決済成功で自動復旧</div>
+    </div>
+    <div class="adm-kpi gold">
+      <div class="adm-kpi-label">🎁 手動・モニター発行枠</div>
+      <div id="kpiManualCount" class="adm-kpi-val">0件</div>
+      <div class="adm-kpi-note">特典配布・テスト招待枠</div>
+    </div>
+    <div class="adm-kpi">
+      <div class="adm-kpi-label">⚪ 解約・停止済み</div>
+      <div id="kpiCanceledCount" class="adm-kpi-val">0件</div>
+      <div id="kpiCancelSched" class="adm-kpi-note">期間末解約予約：0件</div>
+    </div>
+    <div class="adm-kpi">
+      <div class="adm-kpi-label">📱 稼働中の顧客端末数</div>
+      <div id="kpiDevicesCount" class="adm-kpi-val">0台</div>
+      <div class="adm-kpi-note">1契約あたり標準2台上限</div>
+    </div>
+  </section>
+
+  <!-- 2. 自動制御・連携システム稼働ステータス -->
+  <section class="adm-sys-bar" aria-label="システム稼働状態">
+    <div id="sysPills" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    <div class="adm-quick-links">
+      <a id="lnkStripePayment" href="#" target="_blank" rel="noopener noreferrer">決済ページ確認 ↗</a>
+      <a id="lnkStripePortal" href="#" target="_blank" rel="noopener noreferrer">解約ポータル確認 ↗</a>
+      <a href="help.html" target="_blank">ヘルプページ ↗</a>
+    </div>
+  </section>
+
+  <!-- 3. 新規ライセンス手動発行（モニター・特典配布・社内用） -->
+  <section class="card">
+    <h2>🎁 新規ライセンスキーの手動発行（モニター院・特典配布・社内用）</h2>
+    <form id="formIssue" autocomplete="off">
+      <div class="adm-issue-grid">
+        <label>送信先メールアドレス（空欄でも発行可）
+          <input type="email" id="inIssueEmail" maxlength="120" placeholder="例：clinic@example.com">
+        </label>
+        <label>院名・管理メモ（管理画面のみ表示）
+          <input type="text" id="inIssueNote" maxlength="100" placeholder="例：〇〇整体院 モニター枠">
+        </label>
+        <label>同時端末上限
+          <input type="number" id="inIssueMaxDev" min="1" max="50" value="2">
+        </label>
+        <button type="submit" id="btnIssueSubmit" class="btn primary">➕ キーを発行する</button>
+      </div>
+      <label class="check" style="margin:10px 0 0">
+        <input type="checkbox" id="chkIssueSendMail" checked>
+        メールアドレス入力時は、発行と同時にワンタップ有効化メールを自動送信する
+      </label>
+    </form>
+    <p id="issueMsg" class="msg" hidden></p>
+
+    <div id="issuedBox" class="adm-issued-box" hidden>
+      <div style="font-size:12.5px;font-weight:700;color:#65e3af;margin-bottom:6px">✅ 新しいライセンスキーを発行しました（LINEやメールでそのまま案内できます）</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <code id="issuedKeyCode">BAM-XXXX-XXXX-XXXX</code>
+        <button type="button" id="btnCopyIssuedKey" class="btn tiny">📋 キーをコピー</button>
+        <button type="button" id="btnCopyIssuedUrl" class="btn tiny">🔗 ワンタップ有効化リンクをコピー</button>
+      </div>
+      <div id="issuedMailNote" class="hint" style="margin-top:6px"></div>
+    </div>
+  </section>
+
+  <!-- 4. 契約者・ライセンス一覧＆ワンタップ顧客サポート操作 -->
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <h2 style="margin:0">🔍 契約・ライセンス一覧（検索・端末リセット・メール再送・停止／再開）</h2>
+      <button type="button" id="btnExportCsv" class="btn tiny" style="margin:0">📥 CSVダウンロード</button>
+    </div>
+
+    <div class="adm-toolbar">
+      <div id="admTabs" class="adm-tabs">
+        <button type="button" class="adm-tab active" data-filter="all">すべて</button>
+        <button type="button" class="adm-tab" data-filter="paid">🟢 課金中</button>
+        <button type="button" class="adm-tab" data-filter="failed">⚠️ 決済失敗（自動停止）</button>
+        <button type="button" class="adm-tab" data-filter="manual">🎁 手動・モニター</button>
+        <button type="button" class="adm-tab" data-filter="inactive">⚪ 解約・停止</button>
+      </div>
+      <div class="adm-search-row">
+        <input type="search" id="inAdmSearch" placeholder="メール・キー・院名メモで検索">
+      </div>
+    </div>
+
+    <p id="admActionMsg" class="msg" hidden></p>
+    <div id="admList" class="adm-list"></div>
+  </section>
+
+  <!-- 5. 決済・自動利用停止・管理操作のイベント履歴（監査ログ） -->
+  <section class="card">
+    <h2>🕒 直近の決済・自動利用停止・管理イベント履歴（最新80件）</h2>
+    <p class="hint" style="margin:0 0 10px">Stripeでの新規決済・カード決済失敗による自動利用停止・再決済による自動再開・解約・手動操作の履歴が時系列で記録されます。</p>
+    <div id="admLogList" class="adm-logs"></div>
+  </section>
+</main>
+
+<script src="config.js?v=17"></script>
+<script src="admin.js?v=17"></script>
+</body>
+</html>

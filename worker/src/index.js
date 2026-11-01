@@ -121,7 +121,56 @@ async function verifyStripeSignature(rawBody, sigHeader, webhookSecret) {
   return v1Sigs.some((s) => timingSafeEqualHex(s.toLowerCase(), expected));
 }
 
+function isAllowedBrowserOrigin(env, request) {
+  const reqOrigin = (request && request.headers.get("Origin")) || "";
+  if (!reqOrigin) return true;
+  const rawAllowed = String(env.ALLOWED_ORIGIN || "*").trim();
+  if (rawAllowed === "*") return true;
+  if (reqOrigin.startsWith("http://localhost:") || reqOrigin.startsWith("http://127.0.0.1:")) return true;
+  const list = rawAllowed.split(",").map((s) => s.trim()).filter(Boolean);
+  return list.includes(reqOrigin);
+}
+
+function isAdminLicenseRecord(env, record) {
+  if (!record || record.status !== "active") return false;
+  const ownerKey = normKey(env.OWNER_LICENSE_KEY || "");
+  if (ownerKey && timingSafeEqualHex(normKey(record.key), ownerKey)) return true;
+  return record.isAdmin === true;
+}
+
 // ---------- KV ストレージ操作 ----------
+const AUDIT_LOG_KEY = "meta:audit_log";
+const MAX_AUDIT_LOGS = 80;
+
+async function getAuditLogs(env) {
+  try {
+    const raw = await env.LICENSES.get(AUDIT_LOG_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function appendAuditLog(env, entry) {
+  try {
+    const logs = await getAuditLogs(env);
+    const k = normKey(entry.key || "");
+    logs.unshift({
+      id: "ev_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6),
+      at: new Date().toISOString(),
+      type: String(entry.type || "info"),
+      key: k ? maskKey(k) : "",
+      rawKey: k || "",
+      email: String(entry.email || "").slice(0, 120),
+      detail: String(entry.detail || "").slice(0, 200)
+    });
+    if (logs.length > MAX_AUDIT_LOGS) logs.length = MAX_AUDIT_LOGS;
+    await env.LICENSES.put(AUDIT_LOG_KEY, JSON.stringify(logs));
+  } catch (e) {}
+}
+
 async function getLicenseRecord(env, key) {
   const nk = normKey(key);
   if (!nk) return null;
@@ -144,6 +193,42 @@ async function saveLicenseRecord(env, record) {
   if (record.checkoutSessionId) {
     await env.LICENSES.put(`cs:${record.checkoutSessionId}`, nk, { expirationTtl: 60 * 60 * 24 * 14 });
   }
+}
+
+async function deleteLicenseRecord(env, record) {
+  if (!record || !record.key) return;
+  const nk = normKey(record.key);
+  await env.LICENSES.delete(`lic:${nk}`);
+  if (record.subscriptionId) await env.LICENSES.delete(`sub:${record.subscriptionId}`);
+  if (record.customerId) await env.LICENSES.delete(`cus:${record.customerId}`);
+  if (record.checkoutSessionId) await env.LICENSES.delete(`cs:${record.checkoutSessionId}`);
+}
+
+async function listAllLicenseRecords(env) {
+  if (typeof env.LICENSES.list !== "function") return [];
+  const names = [];
+  let cursor = undefined;
+  for (let pageIdx = 0; pageIdx < 20; pageIdx++) {
+    const res = await env.LICENSES.list({ prefix: "lic:", cursor });
+    if (res && Array.isArray(res.keys)) {
+      for (const item of res.keys) {
+        if (item && item.name) names.push(item.name);
+      }
+    }
+    if (!res || res.list_complete || !res.cursor) break;
+    cursor = res.cursor;
+  }
+  const rawList = await Promise.all(names.map((n) => env.LICENSES.get(n)));
+  const records = [];
+  for (const raw of rawList) {
+    if (!raw) continue;
+    try {
+      const rec = JSON.parse(raw);
+      if (rec && rec.key) records.push(rec);
+    } catch (e) {}
+  }
+  records.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  return records;
 }
 
 async function findRecordByStripeIds(env, { sessionId, subscriptionId, customerId }) {
@@ -425,6 +510,7 @@ async function checkAndBindDevice(env, record, deviceId, deviceLabel) {
     return {
       ok: true,
       active: true,
+      isAdmin: isAdminLicenseRecord(env, record),
       key: record.key,
       maskedKey: maskKey(record.key),
       deviceCount: record.devices.length,
@@ -456,6 +542,7 @@ async function checkAndBindDevice(env, record, deviceId, deviceLabel) {
   return {
     ok: true,
     active: true,
+    isAdmin: isAdminLicenseRecord(env, record),
     key: record.key,
     maskedKey: maskKey(record.key),
     deviceCount: record.devices.length,
@@ -541,13 +628,21 @@ export default {
           subscriptionId: obj.subscription,
           email
         });
+        let sentNow = false;
         if (!record.emailSentAt && record.email) {
           const mailRes = await sendLicenseEmail(env, record);
           if (mailRes.sent) {
             record.emailSentAt = new Date().toISOString();
             await saveLicenseRecord(env, record);
+            sentNow = true;
           }
         }
+        await appendAuditLog(env, {
+          type: "checkout_completed",
+          key: record.key,
+          email: record.email,
+          detail: sentNow ? "Stripe決済完了・キー自動発行＆案内メール送信" : "Stripe決済完了・キー発行確認"
+        });
         return jsonResp({ ok: true, handled: type, key: maskKey(record.key) }, 200, env, request);
       }
 
@@ -561,6 +656,14 @@ export default {
             record.status = "inactive";
             record.revokedReason = "canceled";
             record.cancelAtPeriodEnd = false;
+            record.canceledAt = new Date().toISOString();
+            await saveLicenseRecord(env, record);
+            await appendAuditLog(env, {
+              type: "subscription_canceled",
+              key: record.key,
+              email: record.email,
+              detail: "サブスク解約完了により自動利用停止"
+            });
           } else {
             const mapped = mapStripeSubStatus(obj.status);
             const itemPeriodEnd = obj.items && obj.items.data && obj.items.data[0] && obj.items.data[0].current_period_end;
@@ -568,8 +671,19 @@ export default {
             record.revokedReason = mapped.reason;
             record.cancelAtPeriodEnd = Boolean(obj.cancel_at_period_end || obj.cancel_at);
             record.currentPeriodEnd = obj.cancel_at || obj.current_period_end || itemPeriodEnd || null;
+            if (mapped.reason === "payment_failed") {
+              record.paymentFailedAt = new Date().toISOString();
+            }
+            await saveLicenseRecord(env, record);
+            await appendAuditLog(env, {
+              type: mapped.reason === "payment_failed" ? "payment_failed" : "subscription_updated",
+              key: record.key,
+              email: record.email,
+              detail: mapped.reason === "payment_failed"
+                ? `決済未完了（${obj.status}）により自動利用停止`
+                : (record.cancelAtPeriodEnd ? "期間終了での解約予約を反映" : `契約ステータス同期（${obj.status}）`)
+            });
           }
-          await saveLicenseRecord(env, record);
         }
         return jsonResp({ ok: true, handled: type }, 200, env, request);
       }
@@ -583,7 +697,14 @@ export default {
         if (record && (!record.subscriptionId || !subId || record.subscriptionId === subId)) {
           record.status = "inactive";
           record.revokedReason = "payment_failed";
+          record.paymentFailedAt = new Date().toISOString();
           await saveLicenseRecord(env, record);
+          await appendAuditLog(env, {
+            type: "payment_failed",
+            key: record.key,
+            email: record.email,
+            detail: "カード決済失敗（invoice.payment_failed）により自動利用停止"
+          });
         }
         return jsonResp({ ok: true, handled: type }, 200, env, request);
       }
@@ -594,10 +715,22 @@ export default {
           subscriptionId: subId,
           customerId: obj.customer
         });
-        if (record && (!record.subscriptionId || !subId || record.subscriptionId === subId) && record.revokedReason === "payment_failed") {
-          record.status = "active";
-          record.revokedReason = null;
+        if (record && (!record.subscriptionId || !subId || record.subscriptionId === subId)) {
+          const wasPaymentFailed = record.revokedReason === "payment_failed";
+          record.lastPaidAt = new Date().toISOString();
+          if (wasPaymentFailed) {
+            record.status = "active";
+            record.revokedReason = null;
+          }
           await saveLicenseRecord(env, record);
+          if (wasPaymentFailed) {
+            await appendAuditLog(env, {
+              type: "payment_recovered",
+              key: record.key,
+              email: record.email,
+              detail: "再決済成功により自動利用再開"
+            });
+          }
         }
         return jsonResp({ ok: true, handled: type }, 200, env, request);
       }
@@ -690,21 +823,135 @@ export default {
       return jsonResp(result, result.ok ? 200 : 403, env, request);
     }
 
-    // 5. 管理者用API（手動発行・強制停止・端末枠リセット・状態確認）
+    // 5. 管理者用API（CLI用 Bearer ADMIN_SECRET または 管理者ライセンスキー＋端末認証の両対応）
     if (request.method === "POST" && path === "/api/admin") {
       const auth = request.headers.get("Authorization") || "";
       const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-      if (!env.ADMIN_SECRET || token !== env.ADMIN_SECRET) {
-        return jsonResp({ ok: false, error: "Unauthorized" }, 401, env, request);
+      let authMode = "";
+      let authDeviceId = "";
+
+      if (env.ADMIN_SECRET && token && timingSafeEqualHex(token, String(env.ADMIN_SECRET))) {
+        authMode = "secret";
+      } else if (body && body.authKey) {
+        if (!isAllowedBrowserOrigin(env, request)) {
+          return jsonResp({ ok: false, error: "ForbiddenOrigin", message: "許可されていないアクセス元です。" }, 403, env, request);
+        }
+        const adminRec = await getLicenseRecord(env, body.authKey);
+        if (!adminRec || !isAdminLicenseRecord(env, adminRec)) {
+          return jsonResp({ ok: false, error: "Unauthorized", message: "管理者ライセンスの権限がありません。" }, 401, env, request);
+        }
+        const bind = await checkAndBindDevice(env, adminRec, body.deviceId, body.deviceLabel || "管理者端末");
+        if (!bind.ok) {
+          return jsonResp({ ok: false, error: bind.code || "DeviceRejected", message: bind.message || "管理者端末の認証に失敗しました。" }, 403, env, request);
+        }
+        authMode = "owner_key";
+        authDeviceId = normDeviceId(body.deviceId);
+      } else {
+        return jsonResp({ ok: false, error: "Unauthorized", message: "管理者認証が必要です。" }, 401, env, request);
       }
 
       const action = body.action;
+      const baseAppUrl = String(env.APP_URL || "https://seitaimichibiki-cpu.github.io/ba-maker/").replace(/\?.*$/, "");
+      const appSep = baseAppUrl.endsWith("/") ? "" : "/";
+
+      if (action === "dashboard") {
+        const all = await listAllLicenseRecords(env);
+        const auditLogs = await getAuditLogs(env);
+        let activePaidCount = 0;
+        let activeManualCount = 0;
+        let paymentFailedCount = 0;
+        let canceledCount = 0;
+        let cancelScheduledCount = 0;
+        let totalBoundDevices = 0;
+
+        const records = all.map((r) => {
+          const isOwnerAdmin = isAdminLicenseRecord(env, r);
+          const devs = Array.isArray(r.devices) ? r.devices : [];
+          const maxDev = getMaxDevices(env, r);
+          const isStripe = Boolean(r.subscriptionId || r.checkoutSessionId);
+
+          if (r.status === "active") {
+            if (!isOwnerAdmin) {
+              totalBoundDevices += devs.length;
+              if (isStripe) activePaidCount++;
+              else activeManualCount++;
+              if (r.cancelAtPeriodEnd) cancelScheduledCount++;
+            }
+          } else if (r.revokedReason === "payment_failed") {
+            paymentFailedCount++;
+          } else {
+            canceledCount++;
+          }
+
+          return {
+            key: r.key,
+            maskedKey: maskKey(r.key),
+            activateUrl: `${baseAppUrl}${appSep}?key=${encodeURIComponent(r.key)}`,
+            isOwnerAdmin,
+            isStripe,
+            email: r.email || "",
+            note: r.note || "",
+            status: r.status || "inactive",
+            revokedReason: r.revokedReason || null,
+            cancelAtPeriodEnd: !!r.cancelAtPeriodEnd,
+            currentPeriodEnd: r.currentPeriodEnd || null,
+            deviceCount: devs.length,
+            maxDevices: maxDev,
+            devices: devs,
+            emailSentAt: r.emailSentAt || null,
+            paymentFailedAt: r.paymentFailedAt || null,
+            lastPaidAt: r.lastPaidAt || null,
+            canceledAt: r.canceledAt || null,
+            subscriptionId: r.subscriptionId || null,
+            customerId: r.customerId || null,
+            createdAt: r.createdAt || null,
+            updatedAt: r.updatedAt || null
+          };
+        });
+
+        return jsonResp({
+          ok: true,
+          summary: {
+            totalLicenses: records.length,
+            activePaidCount,
+            mrrYen: activePaidCount * 480,
+            activeManualCount,
+            paymentFailedCount,
+            canceledCount,
+            cancelScheduledCount,
+            totalBoundDevices
+          },
+          systemInfo: {
+            service: "ba-maker-license",
+            defaultMaxDevices: getMaxDevices(env, null),
+            autoSuspendOnPaymentFailure: true,
+            autoRecoverOnInvoicePaid: true,
+            emailConfigured: Boolean(env.GAS_WEBHOOK_URL || env.RESEND_API_KEY || env.SENDGRID_API_KEY),
+            stripeSecretConfigured: Boolean(env.STRIPE_SECRET_KEY),
+            webhookSecretConfigured: Boolean(env.STRIPE_WEBHOOK_SECRET),
+            paymentLinkConfigured: Boolean(env.STRIPE_PAYMENT_LINK_ID)
+          },
+          currentDeviceId: authDeviceId || null,
+          records,
+          auditLogs
+        }, 200, env, request);
+      }
+
       if (action === "issue") {
-        const key = generateLicenseKey();
+        let key = generateLicenseKey();
+        for (let i = 0; i < 5; i++) {
+          const dup = await env.LICENSES.get(`lic:${key}`);
+          if (!dup) break;
+          key = generateLicenseKey();
+        }
         const now = new Date().toISOString();
+        const rawMax = Number(body.maxDevices);
+        const maxDev = (Number.isFinite(rawMax) && rawMax >= 1 && rawMax <= 50)
+          ? Math.floor(rawMax)
+          : getMaxDevices(env, null);
         const record = {
           key,
-          email: String(body.email || "").trim(),
+          email: String(body.email || "").trim().slice(0, 120),
           customerId: null,
           subscriptionId: null,
           checkoutSessionId: null,
@@ -712,10 +959,10 @@ export default {
           revokedReason: null,
           cancelAtPeriodEnd: false,
           currentPeriodEnd: null,
-          maxDevices: Number(body.maxDevices) || getMaxDevices(env, null),
+          maxDevices: maxDev,
           devices: [],
           emailSentAt: null,
-          note: String(body.note || "").slice(0, 100),
+          note: String(body.note || "").trim().slice(0, 100),
           createdAt: now,
           updatedAt: now
         };
@@ -728,43 +975,155 @@ export default {
             await saveLicenseRecord(env, record);
           }
         }
-        return jsonResp({ ok: true, record, emailResult: mailRes }, 200, env, request);
+        await appendAuditLog(env, {
+          type: "admin_issue",
+          key: record.key,
+          email: record.email,
+          detail: `手動発行（上限${maxDev}台${record.note ? " / " + record.note : ""}${mailRes.sent ? " / メール送信済" : ""}）`
+        });
+        return jsonResp({
+          ok: true,
+          record,
+          activateUrl: `${baseAppUrl}${appSep}?key=${encodeURIComponent(record.key)}`,
+          emailResult: mailRes
+        }, 200, env, request);
       }
 
       const targetKey = normKey(body.key);
       const record = await getLicenseRecord(env, targetKey);
       if (!record) {
-        return jsonResp({ ok: false, error: "Key not found" }, 404, env, request);
+        return jsonResp({ ok: false, error: "Key not found", message: "対象のライセンスキーが見つかりません。" }, 404, env, request);
       }
 
       if (action === "get") {
         return jsonResp({ ok: true, record }, 200, env, request);
       }
       if (action === "revoke") {
+        if (isAdminLicenseRecord(env, record)) {
+          return jsonResp({ ok: false, error: "CannotRevokeAdmin", message: "管理者自身のライセンスキーは停止できません。" }, 400, env, request);
+        }
         record.status = "inactive";
         record.revokedReason = "admin_revoked";
         await saveLicenseRecord(env, record);
+        await appendAuditLog(env, {
+          type: "admin_revoke",
+          key: record.key,
+          email: record.email,
+          detail: "管理操作により利用停止"
+        });
         return jsonResp({ ok: true, record }, 200, env, request);
       }
       if (action === "reactivate") {
         record.status = "active";
         record.revokedReason = null;
         await saveLicenseRecord(env, record);
+        await appendAuditLog(env, {
+          type: "admin_reactivate",
+          key: record.key,
+          email: record.email,
+          detail: "管理操作により再有効化"
+        });
         return jsonResp({ ok: true, record }, 200, env, request);
       }
       if (action === "reset_devices") {
-        record.devices = [];
+        const keepSelf = authMode === "owner_key" && isAdminLicenseRecord(env, record) && authDeviceId;
+        record.devices = keepSelf
+          ? (record.devices || []).filter((d) => d.id === authDeviceId)
+          : [];
         await saveLicenseRecord(env, record);
+        await appendAuditLog(env, {
+          type: "admin_reset_devices",
+          key: record.key,
+          email: record.email,
+          detail: keepSelf ? "管理者キーの他端末枠をリセット（操作中端末は維持）" : "登録端末枠をすべてリセット"
+        });
+        return jsonResp({ ok: true, record, keptCurrentDevice: keepSelf }, 200, env, request);
+      }
+      if (action === "remove_device") {
+        const targetDev = normDeviceId(body.targetDeviceId);
+        if (!targetDev) {
+          return jsonResp({ ok: false, message: "解除する端末IDが指定されていません。" }, 400, env, request);
+        }
+        if (authMode === "owner_key" && isAdminLicenseRecord(env, record) && targetDev === authDeviceId) {
+          return jsonResp({ ok: false, message: "現在管理画面を開いている端末自身はここから解除できません。" }, 400, env, request);
+        }
+        const before = (record.devices || []).length;
+        record.devices = (record.devices || []).filter((d) => d.id !== targetDev);
+        await saveLicenseRecord(env, record);
+        await appendAuditLog(env, {
+          type: "admin_remove_device",
+          key: record.key,
+          email: record.email,
+          detail: `端末1台を個別解除（${before}台 → ${record.devices.length}台）`
+        });
+        return jsonResp({ ok: true, record }, 200, env, request);
+      }
+      if (action === "update") {
+        if (typeof body.note === "string") {
+          record.note = body.note.trim().slice(0, 100);
+        }
+        if (typeof body.email === "string") {
+          record.email = body.email.trim().slice(0, 120);
+        }
+        if (body.maxDevices !== undefined) {
+          const n = Number(body.maxDevices);
+          if (Number.isFinite(n) && n >= 1 && n <= 50) {
+            record.maxDevices = Math.floor(n);
+          }
+        }
+        if (authMode === "secret" && typeof body.isAdmin === "boolean") {
+          record.isAdmin = body.isAdmin;
+        }
+        await saveLicenseRecord(env, record);
+        await appendAuditLog(env, {
+          type: "admin_update",
+          key: record.key,
+          email: record.email,
+          detail: `契約情報を更新（上限${record.maxDevices}台${record.note ? " / " + record.note : ""}）`
+        });
         return jsonResp({ ok: true, record }, 200, env, request);
       }
       if (action === "resend") {
-        if (body.email) record.email = String(body.email).trim();
+        if (typeof body.email === "string" && body.email.trim()) {
+          record.email = body.email.trim().slice(0, 120);
+        }
+        if (!record.email) {
+          return jsonResp({ ok: false, message: "送信先のメールアドレスを入力してください。" }, 400, env, request);
+        }
         const mailRes = await sendLicenseEmail(env, record);
         if (mailRes.sent) {
           record.emailSentAt = new Date().toISOString();
           await saveLicenseRecord(env, record);
+        } else {
+          await saveLicenseRecord(env, record);
         }
+        await appendAuditLog(env, {
+          type: "admin_resend",
+          key: record.key,
+          email: record.email,
+          detail: mailRes.sent ? `ライセンス案内メールを再送（${record.email}）` : `メール再送失敗（${mailRes.reason || "error"}）`
+        });
         return jsonResp({ ok: true, record, emailResult: mailRes }, 200, env, request);
+      }
+      if (action === "delete") {
+        if (isAdminLicenseRecord(env, record)) {
+          return jsonResp({ ok: false, error: "CannotDeleteAdmin", message: "管理者自身のライセンスキーは削除できません。" }, 400, env, request);
+        }
+        if (record.status === "active" && record.subscriptionId) {
+          return jsonResp({
+            ok: false,
+            error: "CannotDeleteActiveStripe",
+            message: "課金中のStripe定期契約キーは誤削除防止のため削除できません。先に利用停止またはStripe側での解約を行ってください。"
+          }, 400, env, request);
+        }
+        await deleteLicenseRecord(env, record);
+        await appendAuditLog(env, {
+          type: "admin_delete",
+          key: record.key,
+          email: record.email,
+          detail: "ライセンスレコードを削除"
+        });
+        return jsonResp({ ok: true, deletedKey: record.key }, 200, env, request);
       }
 
       return jsonResp({ ok: false, error: "Unknown action" }, 400, env, request);

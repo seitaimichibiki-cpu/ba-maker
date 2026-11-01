@@ -21,13 +21,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="style.css?v=16">
+<link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
 
 <header class="topbar">
   <div class="brand">🎬 <span id="brandName">BAメーカー</span><small>リール用ビフォーアフター</small></div>
   <div class="topbar-right">
+    <a id="btnAdminPage" href="admin.html" class="btn small admin-nav-btn" hidden>🛡 管理画面</a>
     <span id="planBadge" class="badge free">無料プラン</span>
     <button id="btnUpgrade" class="btn primary small">⭐ 有料プラン / キー入力</button>
   </div>
@@ -437,6 +438,8 @@
         ✔ 透かしなし・1080pフルHD ／ ✔ AI顔ぼかし追従 ／ ✔ 姿勢基準線・赤丸＆矢印 ／ ✔ ラスト2秒の予約・LINE誘導カット ／ ✔ 上下分割・スライド比較 ／ ✔ 4:5・1:1サイズ切替 ／ ✔ 免責・症状別テンプレ・SNS固定フッター ／ ✔ 最大90秒・全テーマ＆自由配色・院ロゴ挿入
       </div>
 
+      <a id="btnModalAdminPage" href="admin.html" class="btn small block admin-nav-btn" style="margin:0 0 12px" hidden>🛡 管理者ページを開く（契約・決済・キー管理）</a>
+
       <div class="pro-release-box">
         <h3>📱 この端末の登録解除（端末の入れ替え）</h3>
         <p class="hint">機種変更や別の端末（iPad／PCなど）へ切り替える際は、下のボタンでこの端末の枠を1つ空けられます。</p>
@@ -453,10 +456,10 @@
   </div>
 </div>
 
-<script src="config.js?v=16"></script>
-<script src="bgm.js?v=16"></script>
-<script src="motion.js?v=16"></script>
-<script src="face.js?v=16"></script>
-<script src="app.js?v=16"></script>
+<script src="config.js?v=17"></script>
+<script src="bgm.js?v=17"></script>
+<script src="motion.js?v=17"></script>
+<script src="face.js?v=17"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>
