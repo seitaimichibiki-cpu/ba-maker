@@ -128,9 +128,6 @@
     faceBlur: false,
     posture: {
       grid: false,
-      lines: false,
-      y1: 0.26,
-      y2: 0.56,
       markers: [],       // [{ id, type: "circle" | "arrow", nx, ny, angle, scale }]
       selectedId: 0
     },
@@ -234,7 +231,7 @@
     const map = [
       ["dotTabMedia", !!(state.panels.before.el || state.panels.after.el)],
       ["dotTabText", !!(state.symptom || state.age || state.sub)],
-      ["dotTabFx", !!(state.faceBlur || state.posture.grid || state.posture.lines || state.posture.markers.length || state.disclaimer.enabled)],
+      ["dotTabFx", !!(state.faceBlur || state.posture.grid || state.posture.markers.length || state.disclaimer.enabled)],
       ["dotTabCta", !!state.endCard.enabled]
     ];
     for (let i = 0; i < map.length; i++) {
@@ -650,7 +647,7 @@
     if (state.aspect !== "9:16") list.push(`サイズ切替(${state.aspect})`);
     if (state.layout !== "split-h") list.push(state.layout === "wipe" ? "スライド比較" : "上下2分割");
     if (state.faceBlur) list.push("AI顔ぼかし追従");
-    if (state.posture.grid || state.posture.lines || state.posture.markers.length > 0) list.push("姿勢基準線・スタンプ");
+    if (state.posture.grid || state.posture.markers.length > 0) list.push("姿勢基準線・スタンプ");
     if (state.endCard.enabled) list.push("ラスト2秒誘導カット");
     if (state.disclaimer.enabled) list.push("免責テロップ");
     if ((state.snsFooter || "").trim().length > 0) list.push("SNS固定フッター");
@@ -1290,7 +1287,7 @@
         stEl.textContent = "📌 位置固定中（プレビューの丸をドラッグで移動）";
         stEl.classList.add("ok");
       } else if (b.status === "ai_ok") {
-        stEl.textContent = "✅ AI自動追従中（丸をドラッグで微調整可）";
+        stEl.textContent = "✅ AI自動追従中（丸を頭へドラッグすると再追従）";
         stEl.classList.add("ok");
       } else if (b.status === "patch_ok") {
         stEl.textContent = "✅ 指定した頭の位置から自動追従中";
@@ -1302,6 +1299,26 @@
         stEl.textContent = "待機中";
       }
     });
+  }
+
+  function getVisibleMediaBox(which) {
+    const p = state.panels[which];
+    const s = p ? mediaSize(p) : null;
+    if (!s || !s.w || !s.h) return null;
+    const frame = getPanelFrame(which);
+    const sc = Math.max(frame.w / s.w, frame.h / s.h) * (p.zoom || 1);
+    const dw = s.w * sc, dh = s.h * sc;
+    if (dw <= 0 || dh <= 0) return null;
+    const rangeX = Math.max(0, (dw - frame.w) / 2);
+    const rangeY = Math.max(0, (dh - frame.h) / 2);
+    const dx = frame.x + (frame.w - dw) / 2 + (p.ox || 0) * rangeX;
+    const dy = frame.y + (frame.h - dh) / 2 + (p.oy || 0) * rangeY;
+    return {
+      x0: clamp((frame.x - dx) / dw, 0, 1),
+      y0: clamp((frame.y - dy) / dh, 0, 1),
+      x1: clamp((frame.x + frame.w - dx) / dw, 0, 1),
+      y1: clamp((frame.y + frame.h - dy) / dh, 0, 1)
+    };
   }
 
   async function runFaceTrack(which, fromCurrentAnchor) {
@@ -1333,7 +1350,9 @@
       b.status = "tracking";
       b.trackPct = 0;
       refreshBlurStatusUI();
-      const res = await FACE.trackImage(p.el, isCancelled);
+      const res = await FACE.trackImage(p.el, isCancelled, {
+        visibleBox: getVisibleMediaBox(which)
+      });
       if (isCancelled() || !res) return;
       b.fixedX = res.mx;
       b.fixedY = res.my;
@@ -1384,7 +1403,11 @@
           p.el.duration || 0,
           { t: curT, mx: cur.mx, my: cur.my, mr: cur.mr },
           isCancelled,
-          { onProgress: applyPartial }
+          {
+            onProgress: applyPartial,
+            focusTime: curT,
+            visibleBox: getVisibleMediaBox(which)
+          }
         );
         if (isCancelled()) return;
         if (res && res.keyframes && res.keyframes.length) {
@@ -1422,7 +1445,9 @@
         if (isCancelled()) return;
       }
       const res = await FACE.trackVideoAuto(p.url, p.el.duration || 0, isCancelled, {
-        onProgress: applyPartial
+        onProgress: applyPartial,
+        focusTime: p.trimStart || 0,
+        visibleBox: getVisibleMediaBox(which)
       });
       if (isCancelled()) return;
       if (res && res.keyframes && res.keyframes.length) {
@@ -1566,9 +1591,6 @@
       textPos: JSON.parse(JSON.stringify(state.textPos)),
       faceBlur: state.faceBlur,
       postureGrid: state.posture.grid,
-      postureLines: state.posture.lines,
-      postureY1: state.posture.y1,
-      postureY2: state.posture.y2,
       endCardEnabled: state.endCard.enabled,
       endArea: state.endCard.area,
       endOffer: state.endCard.offer,
@@ -1625,12 +1647,6 @@
       state.posture.grid = pr.postureGrid;
       $("chkPostureGrid").checked = pr.postureGrid;
     }
-    if (typeof pr.postureLines === "boolean") {
-      state.posture.lines = pr.postureLines;
-      $("chkPostureLines").checked = pr.postureLines;
-    }
-    if (typeof pr.postureY1 === "number") state.posture.y1 = clamp(pr.postureY1, 0.04, 0.96);
-    if (typeof pr.postureY2 === "number") state.posture.y2 = clamp(pr.postureY2, 0.04, 0.96);
     if (typeof pr.endCardEnabled === "boolean") {
       state.endCard.enabled = pr.endCardEnabled;
       state.endCard.previewing = false;
@@ -1683,11 +1699,9 @@
     refreshBlurStatusUI();
 
     state.posture.grid = false;
-    state.posture.lines = false;
     state.posture.markers = [];
     state.posture.selectedId = 0;
     if ($("chkPostureGrid")) $("chkPostureGrid").checked = false;
-    if ($("chkPostureLines")) $("chkPostureLines").checked = false;
     refreshMarkerButtons();
 
     state.endCard.enabled = false;
@@ -1736,8 +1750,8 @@
     return {
       cx,
       cy,
-      rx: Math.max(16, baseR * 0.92),
-      ry: Math.max(19, baseR * 1.16),
+      rx: Math.max(18, baseR * 0.98),
+      ry: Math.max(22, baseR * 1.20),
       dw,
       dh,
       smp,
@@ -1814,7 +1828,7 @@
   }
 
   function drawPostureLayer(c, g, opt) {
-    if (!state.posture.grid && !state.posture.lines && state.posture.markers.length === 0) return;
+    if (!state.posture.grid && state.posture.markers.length === 0) return;
     c.save();
     c.beginPath();
     c.rect(0, g.panelY, LW, g.panelH);
@@ -1853,39 +1867,7 @@
       c.restore();
     }
 
-    // 2. 肩・骨盤の高さ比較ライン（上下ドラッグ対応）
-    if (state.posture.lines) {
-      const defs = [
-        { ny: state.posture.y1, color: "#38e8ff", tag: "肩・耳ライン" },
-        { ny: state.posture.y2, color: "#ffd24a", tag: "骨盤・腰ライン" }
-      ];
-      defs.forEach((ln) => {
-        const ly = Math.round(g.panelY + clamp(ln.ny, 0.04, 0.96) * g.panelH);
-        c.save();
-        c.strokeStyle = "rgba(0,0,0,0.58)";
-        c.lineWidth = 9;
-        c.beginPath(); c.moveTo(0, ly); c.lineTo(LW, ly); c.stroke();
-
-        c.strokeStyle = ln.color;
-        c.lineWidth = 5;
-        c.beginPath(); c.moveTo(0, ly); c.lineTo(LW, ly); c.stroke();
-
-        if (opt.preview) {
-          c.font = `700 22px ${FONT}`;
-          const tw = c.measureText(ln.tag).width + 24;
-          c.fillStyle = "rgba(15,17,21,0.84)";
-          rr(c, 16, ly - 38, tw, 32, 10);
-          c.fill();
-          c.fillStyle = ln.color;
-          c.textAlign = "left";
-          c.textBaseline = "middle";
-          c.fillText(ln.tag, 28, ly - 21);
-        }
-        c.restore();
-      });
-    }
-
-    // 3. 注目スタンプ（赤丸・8方向回転矢印）
+    // 2. 注目スタンプ（赤丸・8方向回転矢印）
     state.posture.markers.forEach((m) => {
       const mx = clamp(m.nx, 0.04, 0.96) * LW;
       const my = g.panelY + clamp(m.ny, 0.04, 0.96) * g.panelH;
@@ -1938,7 +1920,6 @@
   function serializePostureKey() {
     return [
       state.posture.grid ? 1 : 0,
-      state.posture.lines ? `${state.posture.y1.toFixed(4)},${state.posture.y2.toFixed(4)}` : "0",
       state.posture.markers.map((m) => `${m.id}:${m.type}:${m.nx.toFixed(4)}:${m.ny.toFixed(4)}:${m.angle}:${m.scale}`).join(";")
     ].join("|");
   }
@@ -2546,11 +2527,11 @@
   function tick() {
     if (!state.exporting) {
       const vids = videos();
-      if (state.playing && !scrubbingTrim && !syncingVideos && !loopTimer) {
+      if (state.playing && !scrubbingTrim && !syncingVideos && !loopTimer && !(drag && drag.kind === "blur")) {
         if (vids.length > 0 && !vids.some(p => p.scanning) && vids.every(isVideoAtEnd)) {
           loopTimer = setTimeout(() => {
             loopTimer = null;
-            if (state.playing && !state.exporting && !scrubbingTrim) restartVideos();
+            if (state.playing && !state.exporting && !scrubbingTrim && !(drag && drag.kind === "blur")) restartVideos();
           }, 180);
         }
       }
@@ -3206,17 +3187,6 @@
     const hy = g.panelY + g.panelH * 0.5;
     return Math.hypot(pt.x - splitX, pt.y - hy) <= 64 || Math.abs(pt.x - splitX) <= 28;
   }
-  function hitPostureLine(pt) {
-    if (!state.posture.lines) return null;
-    const g = getGeom();
-    if (pt.y < g.panelY - 26 || pt.y > g.bottomY + 26) return null;
-    const y1 = g.panelY + state.posture.y1 * g.panelH;
-    const y2 = g.panelY + state.posture.y2 * g.panelH;
-    const d1 = Math.abs(pt.y - y1);
-    const d2 = Math.abs(pt.y - y2);
-    if (Math.min(d1, d2) > 32) return null;
-    return d1 <= d2 ? "y1" : "y2";
-  }
   function getPreviewVisRects() {
     const g = getGeom();
     if (state.layout === "wipe") {
@@ -3287,17 +3257,23 @@
         pinch = null;
         return;
       }
-      const pLine = hitPostureLine(pt);
-      if (pLine) {
-        drag = { kind: "pline", key: pLine };
-        markDirty();
-        pinch = null;
-        return;
-      }
       const fb = hitFaceBlur(pt);
       if (fb) {
-        blurRingUntil = Date.now() + 3000;
-        drag = { kind: "blur", which: fb.which, last: pt, moved: false };
+        blurRingUntil = Date.now() + 3200;
+        const pauseForAim = !!(state.playing && !state.exporting && videos().length > 0);
+        if (pauseForAim) {
+          clearLoopTimer();
+          videos().forEach((vp) => { if (vp.el && !vp.el.paused) vp.el.pause(); });
+        }
+        drag = {
+          kind: "blur",
+          which: fb.which,
+          last: pt,
+          moved: false,
+          totalDmx: 0,
+          totalDmy: 0,
+          pausedPlayback: pauseForAim
+        };
         markDirty();
         pinch = null;
         return;
@@ -3348,18 +3324,17 @@
       markDirty();
       return;
     }
-    if (drag.kind === "pline") {
-      state.posture[drag.key] = clamp((pt.y - g.panelY) / g.panelH, 0.04, 0.96);
-      markDirty();
-      return;
-    }
     if (drag.kind === "blur") {
       const p = state.panels[drag.which];
       const bg = computeBlurGeom(drag.which, null);
       if (p && bg && bg.dw > 0 && bg.dh > 0) {
         const dmx = (pt.x - drag.last.x) / bg.dw;
         const dmy = (pt.y - drag.last.y) / bg.dh;
-        if (Math.abs(dmx) > 0.0005 || Math.abs(dmy) > 0.0005) drag.moved = true;
+        if (Math.abs(dmx) > 0.0005 || Math.abs(dmy) > 0.0005) {
+          drag.moved = true;
+          drag.totalDmx = (drag.totalDmx || 0) + dmx;
+          drag.totalDmy = (drag.totalDmy || 0) + dmy;
+        }
         if (p.blur.mode === "fixed") {
           p.blur.fixedX = clamp(p.blur.fixedX + dmx, 0.03, 0.97);
           p.blur.fixedY = clamp(p.blur.fixedY + dmy, 0.03, 0.97);
@@ -3409,13 +3384,22 @@
       }
     }
     if (drag && drag.kind === "blur" && pointers.size <= 1) {
+      const wasPausedForAim = !!drag.pausedPlayback;
       if (drag.moved) {
         const p = state.panels[drag.which];
-        if (p && p.type === "video" && p.blur && (p.blur.mode === "patch" || p.blur.status === "fallback")) {
-          p.blur.trackPromise = runFaceTrack(drag.which, true);
+        const dragDist = Math.hypot(drag.totalDmx || 0, drag.totalDmy || 0);
+        if (p && p.type === "video" && p.blur && p.blur.mode !== "fixed") {
+          if (p.blur.mode === "patch" || p.blur.status === "fallback" || dragDist >= 0.055) {
+            p.blur.trackPromise = runFaceTrack(drag.which, true);
+          }
         }
       } else {
         switchAppTab("fx");
+      }
+      if (wasPausedForAim && state.playing && !state.exporting && !scrubbingTrim && !syncingVideos) {
+        videos().forEach((vp) => {
+          if (vp.el && !vp.scanning) vp.el.play().catch(() => {});
+        });
       }
     }
     pointers.delete(e.pointerId);
@@ -3426,7 +3410,7 @@
   pv.addEventListener("pointerdown", (e) => {
     const pt = logical(e);
     if ((state.endCard.enabled && state.endCard.previewing) ||
-        hitMarker(pt) || hitWipe(pt) || hitPostureLine(pt) || hitFaceBlur(pt) || hitText(pt)) {
+        hitMarker(pt) || hitWipe(pt) || hitFaceBlur(pt) || hitText(pt)) {
       tapStart = null;
       return;
     }
@@ -4233,11 +4217,6 @@
     // ② 姿勢チェック基準線・注目スタンプ（赤丸・矢印）
     $("chkPostureGrid").onchange = (e) => {
       state.posture.grid = e.target.checked;
-      refreshProTrialUI();
-      markDirty();
-    };
-    $("chkPostureLines").onchange = (e) => {
-      state.posture.lines = e.target.checked;
       refreshProTrialUI();
       markDirty();
     };
