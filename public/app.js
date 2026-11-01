@@ -103,6 +103,7 @@
     baseR: 0.11,
     offsetX: 0,
     offsetY: 0,
+    userNudged: false,
     keyframes: [],
     status: "idle",     // "idle" | "tracking" | "ai_ok" | "patch_ok" | "fallback" | "fixed"
     trackPct: 0,
@@ -115,7 +116,7 @@
     trimStart: 0, autoTrimSec: 0, autoDetected: false,
     scanning: false, scanId: 0, scanPromise: null, audioSrc: null,
     holdCanvas: null, hasHold: false, holdTime: 0, warmed: false, warming: false,
-    frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null,
+    frameSeq: 0, presentedTime: null, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null,
     blur: newBlur()
   });
 
@@ -1206,6 +1207,50 @@
       (p.scanning || p.warming || syncingVideos || !p.el || p.el.seeking || p.el.readyState < 2));
   }
   // ---------- プロ演出・顔ぼかし・姿勢スタンプ・テンプレ制御 ----------
+  let lastImmediateFlushMs = 0;
+  function flushPreviewNow(force) {
+    if (state.exporting || !pv || !pctx) {
+      markDirty();
+      return;
+    }
+    const now = performance.now();
+    if (!force && now - lastImmediateFlushMs < 11) {
+      markDirty();
+      return;
+    }
+    lastImmediateFlushMs = now;
+    markDirty();
+    render(pctx, pv.width, pv.height, { preview: true, guide: state.guide });
+    previewDirty = false;
+  }
+
+  function getPanelSampleTime(p) {
+    if (!p || p.type !== "video" || !p.el) return 0;
+    if (shouldUseHold(p) && typeof p.holdTime === "number") return p.holdTime;
+    const ct = p.el.currentTime || 0;
+    if (typeof p.presentedTime === "number" && Math.abs(p.presentedTime - ct) < 0.25) {
+      return p.el.paused ? p.presentedTime : Math.max(ct, p.presentedTime);
+    }
+    return ct;
+  }
+
+  function reselectCachedAutoBlur() {
+    if (!state.faceBlur || !FACE || typeof FACE.retrackFromCache !== "function") return;
+    ["before", "after"].forEach((w) => {
+      const p = state.panels[w];
+      if (!p || p.type !== "video" || !p.url || !p.blur || !p.blur.enabled) return;
+      if (p.blur.mode !== "auto" || p.blur.userNudged || p.blur.status === "tracking") return;
+      const cached = FACE.retrackFromCache(p.url, { visibleBox: getVisibleMediaBox(w) }, null);
+      if (cached && cached.keyframes && cached.keyframes.length) {
+        p.blur.fixedX = cached.mx;
+        p.blur.fixedY = cached.my;
+        p.blur.baseR = cached.mr;
+        p.blur.keyframes = cached.keyframes;
+        p.blur.status = cached.status;
+      }
+    });
+  }
+
   function setAspect(nextAspect) {
     if (!ASPECT_SPECS[nextAspect]) return;
     state.aspect = nextAspect;
@@ -1231,10 +1276,11 @@
       if (rx === 0) p.ox = 0;
       if (ry === 0) p.oy = 0;
     });
+    reselectCachedAutoBlur();
     syncTextSliders();
     refreshQualityLabels();
     refreshProTrialUI();
-    markDirty();
+    flushPreviewNow(true);
   }
 
   function setLayout(nextLayout) {
@@ -1251,8 +1297,9 @@
       if (rx === 0) p.ox = 0;
       if (ry === 0) p.oy = 0;
     });
+    reselectCachedAutoBlur();
     refreshProTrialUI();
-    markDirty();
+    flushPreviewNow(true);
   }
 
   function refreshBlurStatusUI() {
@@ -1270,8 +1317,8 @@
       const szEl = $("blurSize" + W);
       const stEl = $("blurStatus" + W);
       if (chkEl) chkEl.checked = b.enabled;
-      if (selEl) selEl.value = b.mode;
-      if (szEl) szEl.value = String(b.scale);
+      if (selEl && document.activeElement !== selEl) selEl.value = b.mode;
+      if (szEl && document.activeElement !== szEl) szEl.value = String(b.scale);
       if (!stEl) return;
 
       stEl.className = "blur-status";
@@ -1339,14 +1386,16 @@
         b.baseR = cur.mr;
         b.offsetX = 0;
         b.offsetY = 0;
+        b.userNudged = false;
         b.mode = "fixed";
         b.status = "fixed";
         b.trackPct = 100;
         blurRingUntil = Date.now() + 2600;
         refreshBlurStatusUI();
-        markDirty();
+        flushPreviewNow(true);
         return;
       }
+      b.userNudged = false;
       b.status = "tracking";
       b.trackPct = 0;
       refreshBlurStatusUI();
@@ -1357,8 +1406,10 @@
       b.fixedX = res.mx;
       b.fixedY = res.my;
       b.baseR = res.mr;
-      b.offsetX = 0;
-      b.offsetY = 0;
+      if (!b.userNudged) {
+        b.offsetX = 0;
+        b.offsetY = 0;
+      }
       b.keyframes = res.keyframes || [];
       b.status = res.status;
       b.trackPct = 100;
@@ -1369,6 +1420,7 @@
     }
 
     if (p.type === "video") {
+      const visBox = getVisibleMediaBox(which);
       const applyPartial = (part) => {
         if (isCancelled() || !part) return;
         b.fixedX = part.mx;
@@ -1381,19 +1433,57 @@
       };
 
       if (fromCurrentAnchor) {
-        const curT = p.el ? p.el.currentTime : (p.trimStart || 0);
+        const curT = p.el ? getPanelSampleTime(p) : (p.trimStart || 0);
         const cur = FACE.sampleAtTime(b, curT);
+        const anchorPt = { t: curT, mx: cur.mx, my: cur.my, mr: cur.mr };
+        const shiftOx = b.offsetX || 0;
+        const shiftOy = b.offsetY || 0;
+
+        // すでにキャッシュ完了済みならデコード待ちゼロ（約3ms）で同期完了し、再生再開時に一切止まらない
+        const cached = typeof FACE.retrackFromCache === "function"
+          ? FACE.retrackFromCache(p.url, { visibleBox: visBox }, anchorPt)
+          : null;
+        if (cached && cached.complete && cached.keyframes && cached.keyframes.length) {
+          b.fixedX = cached.mx;
+          b.fixedY = cached.my;
+          b.baseR = cached.mr;
+          b.offsetX = 0;
+          b.offsetY = 0;
+          b.userNudged = false;
+          b.keyframes = cached.keyframes;
+          b.mode = "patch";
+          b.status = "patch_ok";
+          b.trackPct = 100;
+          blurRingUntil = Date.now() + 2600;
+          refreshBlurStatusUI();
+          flushPreviewNow(true);
+          return;
+        }
+
         b.fixedX = cur.mx;
         b.fixedY = cur.my;
         b.baseR = cur.mr;
         b.offsetX = 0;
         b.offsetY = 0;
-        b.keyframes = [{ t: curT, mx: cur.mx, my: cur.my, mr: cur.mr }];
+        b.userNudged = false;
+        // 再解析中も1点固定にして丸をフリーズさせず、部分キャッシュまたは平行移動済み軌道を維持して滑らかに追従継続
+        if (cached && cached.keyframes && cached.keyframes.length) {
+          b.keyframes = cached.keyframes;
+        } else if (b.keyframes && b.keyframes.length > 1 && (shiftOx !== 0 || shiftOy !== 0)) {
+          b.keyframes = b.keyframes.map((k) => ({
+            t: k.t,
+            mx: clamp(k.mx + shiftOx, 0.02, 0.98),
+            my: clamp(k.my + shiftOy, 0.02, 0.98),
+            mr: k.mr
+          }));
+        } else if (!b.keyframes || !b.keyframes.length) {
+          b.keyframes = [anchorPt];
+        }
         b.mode = "patch";
         b.status = "tracking";
         b.trackPct = 0;
         refreshBlurStatusUI();
-        markDirty();
+        flushPreviewNow(true);
         if (p.scanning && p.scanPromise) {
           try { await p.scanPromise; } catch (e) {}
           if (isCancelled()) return;
@@ -1401,7 +1491,7 @@
         const res = await FACE.trackVideoFromAnchor(
           p.url,
           p.el.duration || 0,
-          { t: curT, mx: cur.mx, my: cur.my, mr: cur.mr },
+          anchorPt,
           isCancelled,
           {
             onProgress: applyPartial,
@@ -1414,8 +1504,10 @@
           b.fixedX = res.mx;
           b.fixedY = res.my;
           b.baseR = res.mr;
-          b.offsetX = 0;
-          b.offsetY = 0;
+          if (!b.userNudged) {
+            b.offsetX = 0;
+            b.offsetY = 0;
+          }
           b.keyframes = res.keyframes;
           b.status = "patch_ok";
           b.trackPct = 100;
@@ -1437,6 +1529,23 @@
 
       b.offsetX = 0;
       b.offsetY = 0;
+      b.userNudged = false;
+      const cachedAuto = typeof FACE.retrackFromCache === "function"
+        ? FACE.retrackFromCache(p.url, { visibleBox: visBox }, null)
+        : null;
+      if (cachedAuto && cachedAuto.complete && cachedAuto.keyframes && cachedAuto.keyframes.length) {
+        b.fixedX = cachedAuto.mx;
+        b.fixedY = cachedAuto.my;
+        b.baseR = cachedAuto.mr;
+        b.keyframes = cachedAuto.keyframes;
+        b.status = cachedAuto.status;
+        b.trackPct = 100;
+        blurRingUntil = Date.now() + 2600;
+        refreshBlurStatusUI();
+        flushPreviewNow(true);
+        return;
+      }
+
       b.status = "tracking";
       b.trackPct = 0;
       refreshBlurStatusUI();
@@ -1454,8 +1563,10 @@
         b.fixedX = res.mx;
         b.fixedY = res.my;
         b.baseR = res.mr;
-        b.offsetX = 0;
-        b.offsetY = 0;
+        if (!b.userNudged) {
+          b.offsetX = 0;
+          b.offsetY = 0;
+        }
         b.keyframes = res.keyframes;
         b.status = res.status;
         b.trackPct = 100;
@@ -1739,10 +1850,7 @@
     const rangeY = Math.max(0, (dh - frame.h) / 2);
     const dx = frame.x + (frame.w - dw) / 2 + p.ox * rangeX;
     const dy = frame.y + (frame.h - dh) / 2 + p.oy * rangeY;
-    const useHold = shouldUseHold(p);
-    const mediaT = (p.type === "video" && p.el)
-      ? (useHold && typeof p.holdTime === "number" ? p.holdTime : p.el.currentTime)
-      : 0;
+    const mediaT = (p.type === "video" && p.el) ? getPanelSampleTime(p) : 0;
     const smp = FACE.sampleAtTime(p.blur, mediaT);
     const cx = dx + smp.mx * dw;
     const cy = dy + smp.my * dh;
@@ -2623,6 +2731,7 @@
       } catch (e) {}
     }
     if (p.url) {
+      if (FACE && typeof FACE.evictCache === "function") FACE.evictCache(p.url);
       URL.revokeObjectURL(p.url);
       p.url = null;
     }
@@ -2949,11 +3058,17 @@
   }
 
   function attachVideoFrameTracker(p, v) {
-    v.addEventListener("seeked", markDirty);
+    v.addEventListener("seeked", () => {
+      p.presentedTime = null;
+      markDirty();
+    });
     if (typeof v.requestVideoFrameCallback === "function") {
-      const step = () => {
+      const step = (_now, meta) => {
         if (p.el !== v) return;
         p.frameSeq++;
+        if (meta && typeof meta.mediaTime === "number" && isFinite(meta.mediaTime)) {
+          p.presentedTime = meta.mediaTime;
+        }
         v.requestVideoFrameCallback(step);
       };
       v.requestVideoFrameCallback(step);
@@ -2993,7 +3108,7 @@
         trimStart: 0, autoTrimSec: 0, autoDetected: false,
         scanning: false, scanPromise: null, audioSrc: null,
         holdCanvas: null, hasHold: false, warmed: false, warming: false,
-        frameSeq: 0, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null,
+        frameSeq: 0, presentedTime: null, drawnFrameSeq: -1, drawnTime: -1, drawnHold: null,
         blur: Object.assign(newBlur(), { enabled: keepBlurEnabled, scale: keepBlurScale })
       });
       if (type === "video") {
@@ -3201,16 +3316,17 @@
       after:  getPanelFrame("after")
     };
   }
-  function hitFaceBlur(pt) {
+  function hitFaceBlur(pt, radiusScale) {
     if (!state.faceBlur || !FACE) return null;
+    const mult = radiusScale || 1.15;
     const vis = getPreviewVisRects();
     for (const w of ["before", "after"]) {
       const vr = vis[w];
       if (pt.x < vr.x || pt.x > vr.x + vr.w || pt.y < vr.y || pt.y > vr.y + vr.h) continue;
       const bg = computeBlurGeom(w, vr);
       if (!bg) continue;
-      const rx = Math.max(46, bg.rx * 1.15);
-      const ry = Math.max(50, bg.ry * 1.15);
+      const rx = Math.max(46 * (mult / 1.15), bg.rx * mult);
+      const ry = Math.max(50 * (mult / 1.15), bg.ry * mult);
       const nd = ((pt.x - bg.cx) / rx) ** 2 + ((pt.y - bg.cy) / ry) ** 2;
       if (nd <= 1) return { which: w, bg };
     }
@@ -3294,9 +3410,39 @@
         drag = which ? { kind: "panel", which, last: pt } : null;
       }
       pinch = null;
-    } else if (pointers.size === 2 && drag && drag.kind === "panel") {
+    } else if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
-      pinch = { which: drag.which, dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: state.panels[drag.which].zoom };
+      const mid = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+      const blurHit = (drag && drag.kind === "blur")
+        ? { which: drag.which }
+        : (hitFaceBlur(mid, 1.65) || hitFaceBlur(b, 1.30));
+      if (blurHit) {
+        blurRingUntil = Date.now() + 3200;
+        const alreadyPaused = !!(drag && drag.pausedPlayback);
+        const pauseForAim = alreadyPaused || !!(state.playing && !state.exporting && videos().length > 0);
+        if (!alreadyPaused && pauseForAim) {
+          clearLoopTimer();
+          videos().forEach((vp) => { if (vp.el && !vp.el.paused) vp.el.pause(); });
+        }
+        drag = {
+          kind: "blur",
+          which: blurHit.which,
+          last: pt,
+          moved: false,
+          pinched: true,
+          totalDmx: 0,
+          totalDmy: 0,
+          pausedPlayback: pauseForAim
+        };
+        pinch = {
+          kind: "blur",
+          which: blurHit.which,
+          dist: Math.max(8, Math.hypot(a.x - b.x, a.y - b.y)),
+          scale: state.panels[blurHit.which].blur.scale || 1
+        };
+      } else if (drag && drag.kind === "panel") {
+        pinch = { kind: "panel", which: drag.which, dist: Math.max(8, Math.hypot(a.x - b.x, a.y - b.y)), zoom: state.panels[drag.which].zoom };
+      }
     }
   });
   pv.addEventListener("pointermove", (e) => {
@@ -3305,7 +3451,19 @@
     pointers.set(e.pointerId, pt);
     if (pinch && pointers.size >= 2) {
       const [a, b] = [...pointers.values()];
-      setZoom(pinch.which, pinch.zoom * Math.hypot(a.x - b.x, a.y - b.y) / pinch.dist);
+      const curDist = Math.max(8, Math.hypot(a.x - b.x, a.y - b.y));
+      if (pinch.kind === "blur") {
+        const p = state.panels[pinch.which];
+        if (p && p.blur) {
+          p.blur.scale = clamp(Math.round(pinch.scale * (curDist / pinch.dist) * 20) / 20, 0.55, 2.3);
+          const szEl = $("blurSize" + cap(pinch.which));
+          if (szEl) szEl.value = String(p.blur.scale);
+          blurRingUntil = Date.now() + 2600;
+          flushPreviewNow(false);
+        }
+      } else {
+        setZoom(pinch.which, pinch.zoom * curDist / pinch.dist);
+      }
       return;
     }
     if (!drag) return;
@@ -3315,13 +3473,13 @@
       m.nx = clamp(m.nx + (pt.x - drag.last.x) / LW, 0.04, 0.96);
       m.ny = clamp(m.ny + (pt.y - drag.last.y) / g.panelH, 0.04, 0.96);
       drag.last = pt;
-      markDirty();
+      flushPreviewNow(false);
       return;
     }
     if (drag.kind === "wipe") {
       state.wipeManual = true;
       state.wipePos = clamp(pt.x / LW, 0.08, 0.92);
-      markDirty();
+      flushPreviewNow(false);
       return;
     }
     if (drag.kind === "blur") {
@@ -3341,11 +3499,12 @@
         } else {
           p.blur.offsetX = clamp((p.blur.offsetX || 0) + dmx, -0.85, 0.85);
           p.blur.offsetY = clamp((p.blur.offsetY || 0) + dmy, -0.85, 0.85);
+          p.blur.userNudged = true;
         }
         blurRingUntil = Date.now() + 2800;
       }
       drag.last = pt;
-      markDirty();
+      flushPreviewNow(false);
       return;
     }
     if (drag.kind === "text") {
@@ -3357,7 +3516,7 @@
       drag.last = pt;
       drag.moved = true;
       syncTextSliders();
-      markDirty();
+      flushPreviewNow(false);
       return;
     }
     const p = state.panels[drag.which];
@@ -3366,7 +3525,7 @@
     if (rx > 0) p.ox = clamp(p.ox + (pt.x - drag.last.x) / rx, -1, 1);
     if (ry > 0) p.oy = clamp(p.oy + (pt.y - drag.last.y) / ry, -1, 1);
     drag.last = pt;
-    markDirty();
+    flushPreviewNow(false);
   });
   const endPtr = (e) => {
     const hadOverlayDrag = !!(drag && (drag.kind === "text" || drag.kind === "blur"));
@@ -3385,15 +3544,15 @@
     }
     if (drag && drag.kind === "blur" && pointers.size <= 1) {
       const wasPausedForAim = !!drag.pausedPlayback;
-      if (drag.moved) {
+      if (drag.moved && !drag.pinched) {
         const p = state.panels[drag.which];
         const dragDist = Math.hypot(drag.totalDmx || 0, drag.totalDmy || 0);
         if (p && p.type === "video" && p.blur && p.blur.mode !== "fixed") {
-          if (p.blur.mode === "patch" || p.blur.status === "fallback" || dragDist >= 0.055) {
+          if (p.blur.mode === "patch" || p.blur.status === "fallback" || dragDist >= 0.025) {
             p.blur.trackPromise = runFaceTrack(drag.which, true);
           }
         }
-      } else {
+      } else if (!drag.moved && !drag.pinched) {
         switchAppTab("fx");
       }
       if (wasPausedForAim && state.playing && !state.exporting && !scrubbingTrim && !syncingVideos) {
@@ -3431,7 +3590,7 @@
     if (mk) {
       e.preventDefault();
       mk.scale = clamp((mk.scale || 1) * (e.deltaY < 0 ? 1.07 : 0.93), 0.55, 2.0);
-      markDirty();
+      flushPreviewNow(false);
       return;
     }
     const fb = hitFaceBlur(pt);
@@ -3442,7 +3601,7 @@
       const szEl = $("blurSize" + cap(fb.which));
       if (szEl) szEl.value = String(p.blur.scale);
       blurRingUntil = Date.now() + 2200;
-      markDirty();
+      flushPreviewNow(false);
       return;
     }
     const which = hitPanel(pt); if (!which) return;
@@ -3464,7 +3623,7 @@
     const pf = getPanelFrame(which);
     const { rx, ry } = panelRange(p, pf.w, pf.h);   // ズーム縮小時のはみ出し補正
     if (rx === 0) p.ox = 0; if (ry === 0) p.oy = 0;
-    markDirty();
+    flushPreviewNow(false);
   }
 
   // ---------- 書き出し＆各種SNS投稿 ----------
@@ -4175,19 +4334,20 @@
         const nextMode = e.target.value;
         if (nextMode === "fixed") {
           if (FACE) {
-            const curT = (p.type === "video" && p.el) ? p.el.currentTime : 0;
+            const curT = (p.type === "video" && p.el) ? getPanelSampleTime(p) : 0;
             const cur = FACE.sampleAtTime(p.blur, curT);
             p.blur.fixedX = cur.mx;
             p.blur.fixedY = cur.my;
             p.blur.baseR = cur.mr;
             p.blur.offsetX = 0;
             p.blur.offsetY = 0;
+            p.blur.userNudged = false;
           }
           p.blur.mode = "fixed";
           p.blur.status = "fixed";
           blurRingUntil = Date.now() + 2600;
           refreshBlurStatusUI();
-          markDirty();
+          flushPreviewNow(true);
         } else if (nextMode === "patch") {
           p.blur.mode = "patch";
           if (p.el) p.blur.trackPromise = runFaceTrack(w, true);
@@ -4201,7 +4361,7 @@
       $("blurSize" + W).oninput = (e) => {
         state.panels[w].blur.scale = clamp(parseFloat(e.target.value) || 1, 0.55, 2.3);
         blurRingUntil = Date.now() + 1800;
-        markDirty();
+        flushPreviewNow(false);
       };
       $("btnRetrack" + W).onclick = () => {
         const p = state.panels[w];
