@@ -1033,7 +1033,13 @@
     const saved = normKey(localStorage.getItem(LS_KEY) || "");
     if (!pro && saved) {
       licMeta = loadLicMeta();
-      const ok = await verifyActiveLicense({ silent: false, force: true });
+      if (licMeta && licMeta.verifiedAt && (Date.now() - licMeta.verifiedAt < OFFLINE_GRACE_MS)) {
+        pro = true;
+        applyPlan(true);
+        if ($("modal") && !$("modal").hidden) $("modal").hidden = true;
+        setMsg("⭐ 有料プランが有効になりました！このまま保存・SNS投稿できます。", "ok");
+      }
+      const ok = await verifyActiveLicense({ silent: false, force: false });
       if (ok && pro) {
         if ($("modal") && !$("modal").hidden) $("modal").hidden = true;
         setMsg("⭐ 有料プランが有効になりました！このまま保存・SNS投稿できます。", "ok");
@@ -1868,6 +1874,7 @@
     syncQuickChipsUI();
 
     if ($("modal")) $("modal").hidden = true;
+    saveSettings();
     refreshBgmUI();
     refreshProTrialUI();
     markDirty();
