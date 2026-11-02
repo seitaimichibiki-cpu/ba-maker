@@ -721,6 +721,15 @@
   }
 
   function checkProGateBeforeExport() {
+    if (!pro) {
+      const saved = normKey(localStorage.getItem(LS_KEY) || "");
+      const meta = loadLicMeta();
+      if (saved && meta && meta.verifiedAt && (Date.now() - meta.verifiedAt < OFFLINE_GRACE_MS)) {
+        licMeta = meta;
+        pro = true;
+        applyPlan(true);
+      }
+    }
     if (pro) return true;
     const feats = getActiveProFeatures();
     if (!feats.length) return true;
@@ -999,8 +1008,10 @@
           const finalKey = normKey(d.key);
           try { localStorage.setItem(LS_KEY, finalKey); } catch (e) {}
           saveLicMeta(buildMetaFromApi(finalKey, d));
+          copyTextImmediate(finalKey);
           pro = true;
           applyPlan(true);
+          if ($("modal") && !$("modal").hidden) $("modal").hidden = true;
           setMsg("⭐ ご購入ありがとうございます！有料プランが自動で有効になりました（控えメールも送信しました）。", "ok");
           return;
         }
@@ -1015,6 +1026,25 @@
       }
     }
     openModal("決済確認に時間がかかっています。数分以内に届くメールのワンタップリンクまたはキーをご利用ください。");
+  }
+
+  async function syncLicenseFromOtherTab() {
+    if (state.exporting) return;
+    const saved = normKey(localStorage.getItem(LS_KEY) || "");
+    if (!pro && saved) {
+      licMeta = loadLicMeta();
+      const ok = await verifyActiveLicense({ silent: false, force: true });
+      if (ok && pro) {
+        if ($("modal") && !$("modal").hidden) $("modal").hidden = true;
+        setMsg("⭐ 有料プランが有効になりました！このまま保存・SNS投稿できます。", "ok");
+      }
+    } else if (pro && !saved) {
+      licMeta = null;
+      pro = false;
+      applyPlan(false);
+    } else if (pro && apiBase()) {
+      verifyActiveLicense({ silent: false, force: false });
+    }
   }
 
   async function initLicense() {
@@ -1038,6 +1068,8 @@
       applyPlan(false);
       try {
         await activateLicenseKey(urlKey);
+        copyTextImmediate(urlKey);
+        if ($("modal") && !$("modal").hidden) $("modal").hidden = true;
         setMsg("⭐ ワンタップ認証完了：有料プランが有効になりました！", "ok");
       } catch (e) {
         $("inKey").value = urlKey;
@@ -1104,6 +1136,7 @@
   }
 
   function openModal(reason) {
+    syncLicenseFromOtherTab();
     showFullKey = false;
     syncModalView();
     const reasonEl = $("modalReason");
@@ -1124,6 +1157,7 @@
     }
   }
   function requirePro(feature) {
+    syncLicenseFromOtherTab();
     if (pro) return true;
     openModal(`🔒「${feature}」は有料プラン限定の機能です。`);
     return false;
@@ -2034,11 +2068,33 @@
     ].join("|");
   }
 
+  function drawProTrialSampleOverlay(c, centerX, centerY) {
+    c.save();
+    c.translate(centerX, centerY);
+    c.rotate(-18 * Math.PI / 180);
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    const label = "SAMPLE ／ 有料機能お試し中";
+    c.font = `900 44px ${FONT}`;
+    const tw = c.measureText(label).width;
+    const bw = tw + 72, bh = 82;
+    c.fillStyle = "rgba(15, 18, 26, 0.34)";
+    rr(c, -bw / 2, -bh / 2, bw, bh, bh / 2);
+    c.fill();
+    c.strokeStyle = "rgba(255, 255, 255, 0.38)";
+    c.lineWidth = 3;
+    c.stroke();
+    c.fillStyle = "rgba(255, 255, 255, 0.62)";
+    c.fillText(label, 0, 2);
+    c.restore();
+  }
+
   function getOverlayCanvas(W, H, opt) {
     const g = getGeom();
     const slot = opt.preview ? overlaySlots.preview : overlaySlots.export;
     const hasValidLogo = !!(state.logo && pro && state.logo.naturalWidth > 0 && state.logo.naturalHeight > 0);
     const discText = state.disclaimer.enabled ? (state.disclaimer.text || "").trim() : "";
+    const trialWatermark = !!(!pro && opt.preview && !opt.noWatermark && getActiveProFeatures().length > 0);
     const key = [
       W, H,
       state.aspect,
@@ -2047,6 +2103,7 @@
       opt.guide ? 1 : 0,
       opt.noWatermark ? 1 : 0,
       pro ? 1 : 0,
+      trialWatermark ? 1 : 0,
       fontEpoch,
       state.theme,
       state.theme === "custom" ? `${state.custom.bg},${state.custom.text},${state.custom.accent}` : "",
@@ -2237,6 +2294,11 @@
       c.textBaseline = "middle";
       c.fillText(wmText, wmX, wmY + 2);
       c.restore();
+    }
+
+    // 有料機能お試し中のプレビュー画面収録・スクショ流用防止透かし
+    if (trialWatermark) {
+      drawProTrialSampleOverlay(c, LW / 2, g.panelY + g.panelH * 0.5);
     }
 
     // 安全域ガイド（プレビューのみ）
@@ -2481,6 +2543,7 @@
       c.fillStyle = "rgba(255,255,255,0.75)";
       c.font = `700 28px ${FONT}`;
       c.fillText((CFG.WATERMARK_TEXT || "BAメーカー 無料版") + "（お試しプレビュー）", LW / 2, Math.max(32, cardY - 24));
+      drawProTrialSampleOverlay(c, LW / 2, LH * 0.5);
     }
 
     c.restore();
@@ -3619,6 +3682,7 @@
     e.preventDefault();
     setZoom(which, state.panels[which].zoom * (e.deltaY < 0 ? 1.05 : 0.95));
   }, { passive: false });
+  pv.addEventListener("contextmenu", (e) => e.preventDefault());
   pv.addEventListener("dragover", (e) => e.preventDefault());
   pv.addEventListener("drop", (e) => {
     e.preventDefault();
@@ -4702,8 +4766,19 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         stopBgmPreview();
-      } else if (pro && apiBase() && !state.exporting) {
-        verifyActiveLicense({ silent: false, force: false });
+      } else {
+        syncLicenseFromOtherTab();
+        if (pro && apiBase() && !state.exporting) {
+          verifyActiveLicense({ silent: false, force: false });
+        }
+      }
+    });
+    window.addEventListener("focus", () => {
+      syncLicenseFromOtherTab();
+    });
+    window.addEventListener("storage", (e) => {
+      if (!e.key || e.key === LS_KEY || e.key === LS_LIC_META) {
+        syncLicenseFromOtherTab();
       }
     });
 
@@ -4732,7 +4807,7 @@
         setMsg("このロゴ画像は読み込めませんでした。", "err");
       };
       img.src = nextUrl;
-    };
+      };
     $("btnLogoClear").onclick = clearLogo;
 
     $("selQuality").onchange = (e) => {
@@ -4761,6 +4836,8 @@
     $("btnNativeShare").onclick = handleNativeShare;
     $("snsCaption").addEventListener("input", () => { captionEdited = true; });
     $("btnCopyCaption").onclick = async () => {
+      syncLicenseFromOtherTab();
+      if (!pro && (state.snsFooter || "").trim().length > 0 && !requirePro("SNS固定フッター")) return;
       const ok = await copyTextAsync(getCaptionText());
       setMsg(ok ? "📋 投稿文とハッシュタグをコピーしました。" : "投稿文を選択してコピーしてください。", ok ? "ok" : "");
     };

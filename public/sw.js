@@ -1,10 +1,10 @@
 /**
- * BAメーカー PWA Service Worker (v25)
+ * BAメーカー PWA Service Worker (v26)
  * - アプリ本体(同一オリジン): Network-First（オンライン時は常に最新版を反映し、オフライン・電波不良時はキャッシュから即起動）
  * - AIぼかしモデル(MediaPipe WASM/モデル): Cache-First（2回目以降のAI起動を高速化）
  * - ライセンス認証API(workers.dev / /api/): キャッシュ対象外（常にリアルタイム認証）
  */
-const SHELL_CACHE = "ba-maker-shell-v25";
+const SHELL_CACHE = "ba-maker-shell-v26";
 const MODEL_CACHE = "ba-maker-ai-v1";
 
 const PRECACHE_URLS = [
@@ -19,13 +19,13 @@ const PRECACHE_URLS = [
   "./icon-180.png",
   "./icon-192.png",
   "./icon-512.png",
-  "./style.css?v=25",
-  "./config.js?v=25",
-  "./bgm.js?v=25",
-  "./motion.js?v=25",
-  "./face.js?v=25",
-  "./app.js?v=25",
-  "./help.js?v=25"
+  "./style.css?v=26",
+  "./config.js?v=26",
+  "./bgm.js?v=26",
+  "./motion.js?v=26",
+  "./face.js?v=26",
+  "./app.js?v=26",
+  "./help.js?v=26"
 ];
 
 self.addEventListener("install", (event) => {
