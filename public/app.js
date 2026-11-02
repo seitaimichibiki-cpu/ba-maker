@@ -3407,7 +3407,7 @@
         markDirty();
       } else {
         const which = hitPanel(pt);
-        drag = which ? { kind: "panel", which, last: pt } : null;
+        drag = which ? { kind: "panel", which, last: pt, moved: false } : null;
       }
       pinch = null;
     } else if (pointers.size === 2) {
@@ -3522,13 +3522,22 @@
     const p = state.panels[drag.which];
     const pf = getPanelFrame(drag.which);
     const { rx, ry } = panelRange(p, pf.w, pf.h);
-    if (rx > 0) p.ox = clamp(p.ox + (pt.x - drag.last.x) / rx, -1, 1);
-    if (ry > 0) p.oy = clamp(p.oy + (pt.y - drag.last.y) / ry, -1, 1);
+    if (rx > 0) {
+      p.ox = clamp(p.ox + (pt.x - drag.last.x) / rx, -1, 1);
+      drag.moved = true;
+    }
+    if (ry > 0) {
+      p.oy = clamp(p.oy + (pt.y - drag.last.y) / ry, -1, 1);
+      drag.moved = true;
+    }
     drag.last = pt;
     flushPreviewNow(false);
   });
   const endPtr = (e) => {
     const hadOverlayDrag = !!(drag && (drag.kind === "text" || drag.kind === "blur"));
+    if (drag && drag.kind === "panel" && pointers.size <= 1 && drag.moved) {
+      reselectCachedAutoBlur();
+    }
     if (drag && drag.kind === "text" && pointers.size <= 1) {
       if (drag.moved) {
         saveSettings();
@@ -3623,6 +3632,7 @@
     const pf = getPanelFrame(which);
     const { rx, ry } = panelRange(p, pf.w, pf.h);   // ズーム縮小時のはみ出し補正
     if (rx === 0) p.ox = 0; if (ry === 0) p.oy = 0;
+    reselectCachedAutoBlur();
     flushPreviewNow(false);
   }
 
@@ -3808,6 +3818,13 @@
     setSnsButtonsDisabled(true);
     $("progressBox").hidden = false; $("progressBar").style.width = "0%";
     let resultExp = null;
+    let wakeLockSentinel = null;
+    if (navigator.wakeLock && typeof navigator.wakeLock.request === "function") {
+      navigator.wakeLock.request("screen").then((s) => {
+        if (state.exporting) wakeLockSentinel = s;
+        else { try { s.release(); } catch (e) {} }
+      }).catch(() => {});
+    }
 
     try {
       // 書き出し前にライセンスの有効状態を再照合（解約・未払い時は自動で無料プランへ切り戻す）
@@ -3917,7 +3934,16 @@
       let lastProg = -1;
       let exportedFrames = 0;
       await new Promise((resolve) => {
-        const loop = () => {
+        let finished = false;
+        let bgInterval = null;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          if (bgInterval) clearInterval(bgInterval);
+          resolve();
+        };
+        const step = () => {
+          if (finished) return;
           const now = performance.now();
           const t = (now - t0) / 1000;
           // 120Hz/60Hz端末でも captureStream(30) に合わせた約30fps間隔でのみ合成し、エンコーダのGPU/CPU帯域を確保
@@ -3932,9 +3958,17 @@
             lastProg = now;
             $("progressBar").style.width = Math.min(100, t / dur * 100) + "%";
           }
-          if (t >= dur) return resolve();
-          requestAnimationFrame(loop);
+          if (t >= dur) {
+            finish();
+            return;
+          }
         };
+        const loop = () => {
+          if (finished) return;
+          step();
+          if (!finished) requestAnimationFrame(loop);
+        };
+        bgInterval = setInterval(step, 100);
         loop();
       });
       $("progressBar").style.width = "100%";
@@ -3949,12 +3983,15 @@
         download(blob, filename);
         setMsg(ext === "mp4"
           ? (wantBgm ? "BGM付きのMP4動画を保存しました。下のSNSボタンからそのまま投稿できます。" : "MP4を保存しました。下のSNSボタンからそのまま投稿できます。")
-          : "WebMで保存しました（Instagramに投稿できない場合はMP4へ変換が必要です。READMEを参照）。", "ok");
+          : "WebM形式で保存しました（iPhone/iPadはSafari、PC/Androidは最新Chromeをお使いいただくとそのままMP4形式で保存できます）。", "ok");
       }
     } catch (err) {
       console.error(err);
       setMsg("書き出しに失敗しました：" + (err && err.message ? err.message : err), "err");
     } finally {
+      if (wakeLockSentinel) {
+        try { wakeLockSentinel.release(); } catch (e) {}
+      }
       if (bgmRec) bgmRec.stop();
       if (audioNode) { try { audioNode.disconnect(); } catch (e) {} }
       if (audioEl) audioEl.muted = true;

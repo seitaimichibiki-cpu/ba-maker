@@ -138,9 +138,10 @@ function isAdminLicenseRecord(env, record) {
   return record.isAdmin === true;
 }
 
-// ---------- KV ストレージ操作 ----------
+// ---------- KV ストレージ操作（meta:records_map 統合により 50 subrequests 制限を完全回避） ----------
 const AUDIT_LOG_KEY = "meta:audit_log";
 const KEY_INDEX_KEY = "meta:key_index";
+const RECORDS_MAP_KEY = "meta:records_map";
 const MAX_AUDIT_LOGS = 80;
 
 async function getKeyIndex(env) {
@@ -151,6 +152,17 @@ async function getKeyIndex(env) {
     return Array.isArray(arr) ? arr.map((k) => normKey(k)).filter(Boolean) : [];
   } catch (e) {
     return [];
+  }
+}
+
+async function getRecordsMap(env) {
+  try {
+    const raw = await env.LICENSES.get(RECORDS_MAP_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === "object" && !Array.isArray(obj) ? obj : {};
+  } catch (e) {
+    return {};
   }
 }
 
@@ -219,6 +231,17 @@ async function saveLicenseRecord(env, record) {
   record.updatedAt = new Date().toISOString();
   await env.LICENSES.put(`lic:${nk}`, JSON.stringify(record));
   await addKeyToIndex(env, nk);
+  try {
+    const map = await getRecordsMap(env);
+    map[nk] = record;
+    await env.LICENSES.put(RECORDS_MAP_KEY, JSON.stringify(map));
+  } catch (e) {}
+  if (record.email) {
+    const cleanMail = String(record.email).trim().toLowerCase();
+    if (cleanMail && record.status === "active") {
+      try { await env.LICENSES.put(`email:${cleanMail}`, nk); } catch (e) {}
+    }
+  }
   if (record.subscriptionId) {
     await env.LICENSES.put(`sub:${record.subscriptionId}`, nk);
   }
@@ -235,40 +258,74 @@ async function deleteLicenseRecord(env, record) {
   const nk = normKey(record.key);
   await env.LICENSES.delete(`lic:${nk}`);
   await removeKeyFromIndex(env, nk);
+  try {
+    const map = await getRecordsMap(env);
+    if (map[nk]) {
+      delete map[nk];
+      await env.LICENSES.put(RECORDS_MAP_KEY, JSON.stringify(map));
+    }
+  } catch (e) {}
+  if (record.email) {
+    const cleanMail = String(record.email).trim().toLowerCase();
+    if (cleanMail) {
+      try {
+        const cur = await env.LICENSES.get(`email:${cleanMail}`);
+        if (cur === nk) await env.LICENSES.delete(`email:${cleanMail}`);
+      } catch (e) {}
+    }
+  }
   if (record.subscriptionId) await env.LICENSES.delete(`sub:${record.subscriptionId}`);
   if (record.customerId) await env.LICENSES.delete(`cus:${record.customerId}`);
   if (record.checkoutSessionId) await env.LICENSES.delete(`cs:${record.checkoutSessionId}`);
 }
 
 async function listAllLicenseRecords(env) {
-  const nameSet = new Set();
-  const indexedKeys = await getKeyIndex(env);
-  for (const nk of indexedKeys) {
-    if (nk) nameSet.add(`lic:${nk}`);
+  const [indexedKeys, map] = await Promise.all([getKeyIndex(env), getRecordsMap(env)]);
+  const keySet = new Set(indexedKeys);
+  for (const k of Object.keys(map)) {
+    const nk = normKey(k);
+    if (nk) keySet.add(nk);
   }
-  if (typeof env.LICENSES.list === "function") {
-    let cursor = undefined;
-    for (let pageIdx = 0; pageIdx < 20; pageIdx++) {
-      const res = await env.LICENSES.list({ prefix: "lic:", cursor });
+  if (keySet.size === 0 && typeof env.LICENSES.list === "function") {
+    try {
+      const res = await env.LICENSES.list({ prefix: "lic:", limit: 200 });
       if (res && Array.isArray(res.keys)) {
         for (const item of res.keys) {
-          if (item && item.name) nameSet.add(item.name);
+          if (item && item.name && item.name.startsWith("lic:")) {
+            const nk = normKey(item.name.slice(4));
+            if (nk) keySet.add(nk);
+          }
         }
       }
-      if (!res || res.list_complete || !res.cursor) break;
-      cursor = res.cursor;
-    }
-  }
-  const names = Array.from(nameSet);
-  const rawList = await Promise.all(names.map((n) => env.LICENSES.get(n)));
-  const records = [];
-  for (const raw of rawList) {
-    if (!raw) continue;
-    try {
-      const rec = JSON.parse(raw);
-      if (rec && rec.key) records.push(rec);
     } catch (e) {}
   }
+
+  const missingKeys = [];
+  for (const nk of keySet) {
+    if (nk && !map[nk]) missingKeys.push(nk);
+  }
+
+  // 未キャッシュ分のみ最大25件ずつ安全にバックフィル（1回のWorker実行あたりのsubrequest上限を厳守）
+  if (missingKeys.length > 0) {
+    const batch = missingKeys.slice(0, 25);
+    const rawList = await Promise.all(batch.map((nk) => env.LICENSES.get(`lic:${nk}`)));
+    let mapChanged = false;
+    for (const raw of rawList) {
+      if (!raw) continue;
+      try {
+        const rec = JSON.parse(raw);
+        if (rec && rec.key) {
+          map[normKey(rec.key)] = rec;
+          mapChanged = true;
+        }
+      } catch (e) {}
+    }
+    if (mapChanged) {
+      try { await env.LICENSES.put(RECORDS_MAP_KEY, JSON.stringify(map)); } catch (e) {}
+    }
+  }
+
+  const records = Object.values(map).filter((r) => r && r.key);
   records.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   return records;
 }
@@ -831,14 +888,38 @@ export default {
       }
     }
 
-    // 2. ライセンス有効化・定期照合（端末2台制限＆解約チェック）
+    // 2. ライセンス有効化・定期照合（端末2台制限＆解約チェック＋総当たり攻撃対策）
     if (request.method === "POST" && (path === "/api/activate" || path === "/api/verify")) {
+      if (!isAllowedBrowserOrigin(env, request)) {
+        return jsonResp({ ok: false, active: false, code: "FORBIDDEN_ORIGIN", message: "許可されていないアクセス元です。" }, 403, env, request);
+      }
       const key = normKey(body.key);
       if (!key) {
         return jsonResp({ ok: false, active: false, code: "EMPTY_KEY", message: "ライセンスキーを入力してください。" }, 400, env, request);
       }
+      const clientIp = String(request.headers.get("CF-Connecting-IP") || "local").slice(0, 64);
+      const actFailKey = `rl:act_fail:${clientIp}`;
+      let actFailCount = 0;
+      if (path === "/api/activate") {
+        try {
+          actFailCount = parseInt(await env.LICENSES.get(actFailKey) || "0", 10) || 0;
+        } catch (e) {}
+        if (actFailCount >= 15) {
+          return jsonResp({
+            ok: false,
+            active: false,
+            code: "RATE_LIMITED",
+            message: "短時間に試行が集中しています。15分ほど時間をおいてからお試しください。"
+          }, 429, env, request);
+        }
+      }
       const record = await getLicenseRecord(env, key);
       if (!record) {
+        if (path === "/api/activate") {
+          try {
+            await env.LICENSES.put(actFailKey, String(actFailCount + 1), { expirationTtl: 900 });
+          } catch (e) {}
+        }
         return jsonResp({ ok: false, active: false, code: "INVALID_KEY", message: "ライセンスキーが正しくありません。" }, 404, env, request);
       }
       const result = await checkAndBindDevice(env, record, body.deviceId, body.deviceLabel);
@@ -847,6 +928,9 @@ export default {
 
     // 3. この端末のライセンス解除（2台枠から1台分を解放）
     if (request.method === "POST" && path === "/api/deactivate") {
+      if (!isAllowedBrowserOrigin(env, request)) {
+        return jsonResp({ ok: false, released: false, code: "FORBIDDEN_ORIGIN", message: "許可されていないアクセス元です。" }, 403, env, request);
+      }
       const key = normKey(body.key);
       const devId = normDeviceId(body.deviceId);
       const record = await getLicenseRecord(env, key);
@@ -868,6 +952,9 @@ export default {
 
     // 4. Stripe決済完了後のリダイレクト即時有効化（?session_id=cs_...）
     if (request.method === "POST" && path === "/api/claim-session") {
+      if (!isAllowedBrowserOrigin(env, request)) {
+        return jsonResp({ ok: false, code: "FORBIDDEN_ORIGIN", message: "許可されていないアクセス元です。" }, 403, env, request);
+      }
       const sessionId = String(body.sessionId || "").trim();
       if (!sessionId.startsWith("cs_")) {
         return jsonResp({ ok: false, code: "BAD_SESSION", message: "決済セッションIDが不正です。" }, 400, env, request);
@@ -946,13 +1033,27 @@ export default {
         }
       } catch (e) {}
 
-      const all = await listAllLicenseRecords(env);
-      const matched = all.find((r) =>
-        r &&
-        r.status === "active" &&
-        !isAdminLicenseRecord(env, r) &&
-        String(r.email || "").trim().toLowerCase() === rawEmail
-      );
+      let matched = null;
+      try {
+        const indexedKey = await env.LICENSES.get("email:" + rawEmail);
+        if (indexedKey) {
+          const rec = await getLicenseRecord(env, indexedKey);
+          if (rec && rec.status === "active" && !isAdminLicenseRecord(env, rec) &&
+              String(rec.email || "").trim().toLowerCase() === rawEmail) {
+            matched = rec;
+          }
+        }
+      } catch (e) {}
+
+      if (!matched) {
+        const all = await listAllLicenseRecords(env);
+        matched = all.find((r) =>
+          r &&
+          r.status === "active" &&
+          !isAdminLicenseRecord(env, r) &&
+          String(r.email || "").trim().toLowerCase() === rawEmail
+        ) || null;
+      }
 
       try {
         await env.LICENSES.put(mailCooldownKey, "1", { expirationTtl: 180 });

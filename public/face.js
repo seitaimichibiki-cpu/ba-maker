@@ -223,7 +223,7 @@
 
   function evalVisibleWeight(mx, my, visibleBox) {
     if (!visibleBox) {
-      return 1.0 - Math.abs(mx - 0.5) * 0.22;
+      return 1.0 - Math.abs(mx - 0.5) * 0.08;
     }
     const { x0, y0, x1, y1 } = visibleBox;
     const midX = (x0 + x1) * 0.5;
@@ -231,10 +231,10 @@
     const outX = mx < x0 ? (x0 - mx) : (mx > x1 ? (mx - x1) : 0);
     const outY = my < y0 ? (y0 - my) : (my > y1 ? (my - y1) : 0);
     const outDist = Math.hypot(outX, outY);
-    if (outDist > 0) {
-      return Math.max(0.16, 0.70 - outDist * 2.9);
+    if (outDist > 0.06) {
+      return Math.max(0.38, 0.90 - (outDist - 0.06) * 2.1);
     }
-    return 1.08 - Math.min(0.22, (Math.abs(mx - midX) / spanX) * 0.24);
+    return 1.04 - Math.min(0.06, (Math.abs(mx - midX) / spanX) * 0.06);
   }
 
   /**
@@ -741,10 +741,10 @@
             if (dist > maxJump) continue;
 
             const stepVel = dist / Math.max(0.06, dt);
-            const velCost = (dist / (0.045 + dt * 0.55)) * 0.95 + (stepVel > 0.70 ? (stepVel - 0.70) * 1.15 : 0);
-            const sizeCost = Math.abs(Math.log((cand.mr + 0.015) / (prevCand.mr + 0.015))) * 0.38;
-            const gapCost = (i - p - 1) * 0.035;
-            const candTotal = dp[p][pc] - velCost - sizeCost - gapCost;
+            const velCost = (dist / (0.055 + dt * 0.65)) * 0.72 + (stepVel > 0.85 ? (stepVel - 0.85) * 0.95 : 0);
+            const sizeCost = Math.abs(Math.log((cand.mr + 0.015) / (prevCand.mr + 0.015))) * 0.32;
+            const gapCost = (i - p - 1) * 0.032;
+            const candTotal = dp[p][pc] + 0.42 - velCost - sizeCost - gapCost;
 
             if (candTotal > bestPrevScore) {
               bestPrevScore = candTotal;
