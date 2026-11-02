@@ -495,7 +495,9 @@
         }
         if (d && d.endCard) {
           if (typeof d.endCard.area === "string") state.endCard.area = d.endCard.area.slice(0, 32);
-          if (typeof d.endCard.offer === "string") state.endCard.offer = d.endCard.offer.slice(0, 42);
+          if (typeof d.endCard.offer === "string" && !/13,000|1,980/.test(d.endCard.offer)) {
+            state.endCard.offer = d.endCard.offer.slice(0, 42);
+          }
           if (typeof d.endCard.cta === "string" && d.endCard.cta.trim()) state.endCard.cta = d.endCard.cta.slice(0, 36);
           if (typeof d.endCard.logoSize === "number" && isFinite(d.endCard.logoSize)) {
             state.endCard.logoSize = clamp(Math.round(d.endCard.logoSize), END_LOGO_MIN_PX, END_LOGO_MAX_PX);
