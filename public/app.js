@@ -3548,7 +3548,7 @@
         const p = state.panels[drag.which];
         const dragDist = Math.hypot(drag.totalDmx || 0, drag.totalDmy || 0);
         if (p && p.type === "video" && p.blur && p.blur.mode !== "fixed") {
-          if (p.blur.mode === "patch" || p.blur.status === "fallback" || dragDist >= 0.025) {
+          if (p.blur.mode === "patch" || p.blur.status === "fallback" || dragDist >= 0.008) {
             p.blur.trackPromise = runFaceTrack(drag.which, true);
           }
         }

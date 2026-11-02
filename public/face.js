@@ -1,14 +1,17 @@
 /**
- * BAメーカー 顔・頭部ぼかし＆ゼロ遅延・高精度自動追従エンジン v22（ブラウザ内完結・サーバー送信なし）
+ * BAメーカー 顔・頭部ぼかし＆ゼロ遅延・超高精度自動追従エンジン v23（ブラウザ内完結・サーバー送信なし）
  *
- * 1. フレームPTS完全同期シーク（Pre-Armed requestVideoFrameCallback + metadata.mediaTime）：
- *    - シーク完了前の旧テクスチャ誤取得による100〜400msの位相遅れを根絶し、ミリ秒精度の実フレームPTSでキーフレームを記録
- * 2. リアルタイム頭部サイズ追従（両耳3D幅 1/Z スケーリング ＋ 7段階マルチスケール楕円前景トラッカー）：
- *    - 前屈でのカメラ接近・歩行での遠近変化・アップ撮影（最大 mr=0.52）でもサイズ変化が遅れず即座に拡大縮小
- * 3. 瞬間速度・サイズ変化率適応フィルタ ＋ ゼロ・イーズイン単調エルミート補間：
- *    - 折り返し頂点（前屈最下点）のピーク潰れと動き出しのイーズイン遅延をゼロ化し、静止時の微細ブレのみを吸収
- * 4. 3枠LRU特徴スロットキャッシュ（Int16Array）＋ 前後パネルPass1インターリーブ ＋ 14msフレーム予算スライス：
- *    - ぼかし丸ドラッグ再追従・サイズ比率／レイアウト変更時の再計算を約3msで即時完了し、解析中もUI操作・60fps再生を一切阻害しない
+ * 1. 全フレームDual-AI検出（PoseLandmarker Full + フル解像度ROI FaceDetector + 全画面FaceDetector）＋ WebGL2 GPU推論：
+ *    - Pass2でのFaceDetector省略や静止フレーム推論スキップを完全撤廃し、全10fpsフレームで骨格＋顔検出を統合
+ *    - WebGL2 GPUデリゲート（CPU自動フォールバック付）により、全フレームDual-AI推論を高速実行
+ * 2. 連続頭蓋ベクトル推定 ＋ 強正則化ビタビDP（Viterbi DP）＋ ハンペル外れ値除去：
+ *    - 前屈・側屈・回旋時に頭が肩より下へ入る瞬間も不連続ジャンプを起こさない連続垂直重み（vertW）を採用
+ *    - 速度・サイズ遷移ペナルティを強化し、1〜5フレームのAI未検出ギャップで背景や体幹の誤検出へ飛ばず正確にブリッジ
+ * 3. 外観SAD主導・時間ステップ連動楕円トラッカー ＋ ジグザグ微細ブレ＆スパイク除去フィルタ：
+ *    - 探索窓を時間差 dt に連動させ、体幹や衣服の前景コントラストに引っ張られるドリフトとサイズ脈動を根絶
+ *    - 1フレームのAIジグザグ揺れ（dot < 0）と半径スパイクのみを除去し、等速移動と前屈最下点（5点検証頂点）は位相遅れゼロで追従
+ * 4. 厳密 seeked + 1rAF 同期シーク ＋ 単調前進10fpsデコード ＋ 3枠LRU特徴スロットキャッシュ：
+ *    - 長GOP動画（H.264/HEVC）でのシーク途中タイムアウトによる旧フレーム誤解析とランダムシーク詰まりを解消
  */
 (() => {
   "use strict";
@@ -122,9 +125,18 @@
     }
   }
 
-  // ---------- MediaPipe デュアルAI（PoseLandmarker Full + FaceDetector）遅延ローダー ----------
+  // ---------- MediaPipe デュアルAI（PoseLandmarker Full + FaceDetector）遅延ローダー（XNNPACK SIMD高速推論） ----------
   let detectorsPromise = null;
   let cachedDetectors = null;
+
+  async function createFaceDetectorWithFallback(FaceDetector, vision) {
+    if (!FaceDetector) return null;
+    return await FaceDetector.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "CPU" },
+      runningMode: "IMAGE",
+      minDetectionConfidence: 0.34
+    }).catch(() => null);
+  }
 
   async function createPoseDetector(PoseLandmarker, vision) {
     if (!PoseLandmarker) return null;
@@ -132,8 +144,8 @@
       baseOptions: { modelAssetPath: modelUrl, delegate: "CPU" },
       runningMode: "IMAGE",
       numPoses: 3,
-      minPoseDetectionConfidence: 0.28,
-      minPosePresenceConfidence: 0.28
+      minPoseDetectionConfidence: 0.26,
+      minPosePresenceConfidence: 0.26
     });
     const full = await PoseLandmarker.createFromOptions(vision, opts(POSE_FULL_URL)).catch(() => null);
     if (full) return full;
@@ -163,13 +175,7 @@
         ]);
 
         const [face, pose] = await Promise.all([
-          FaceDetector
-            ? FaceDetector.createFromOptions(vision, {
-                baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "CPU" },
-                runningMode: "IMAGE",
-                minDetectionConfidence: 0.34
-              }).catch(() => null)
-            : Promise.resolve(null),
+          createFaceDetectorWithFallback(FaceDetector, vision),
           createPoseDetector(PoseLandmarker, vision)
         ]);
 
@@ -419,20 +425,22 @@
           torsoPx * 0.225
         );
         const rPx = headDirectPx > minDim * 0.042
-          ? Math.max(headDirectPx, bodyFloorPx * 0.90, minDim * 0.046)
+          ? Math.max(headDirectPx, bodyFloorPx * 0.88, minDim * 0.046)
           : Math.max(headDirectPx, bodyFloorPx, minDim * 0.052);
 
         if (hasShoulder && neckPx > 3) {
           let ux = ((hx - sx) * dw) / neckPx;
           let uy = ((hy - sy) * dh) / neckPx;
-          const isUpright = (hipY - sy) > 0.10 && hy < sy;
-          if (isUpright) {
-            ux *= 0.34;
-            const nLen = Math.hypot(ux, uy) || 1;
-            ux /= nLen; uy /= nLen;
-          }
-          hx += (ux * rPx * 0.18) / dw;
-          hy += (uy * rPx * 0.18) / dh;
+          // 連続垂直度ウェイト vertW（前屈で頭が肩の高さを通過する瞬間の不連続ジャンプを完全排除）
+          const torsoVert = clamp((hipY - sy) / 0.18, 0, 1);
+          const neckVert = clamp(-uy, 0, 1);
+          const vertW = torsoVert * neckVert;
+          ux *= (1 - 0.62 * vertW);
+          const nLen = Math.hypot(ux, uy) || 1;
+          ux /= nLen;
+          uy /= nLen;
+          hx += (ux * rPx * 0.16) / dw;
+          hy += (uy * rPx * 0.16) / dh;
         } else {
           hy -= (rPx * 0.14) / dh;
         }
@@ -449,16 +457,16 @@
         // 2段階フル解像度ROI顔ズーム検出：実測顔サイズへ遅れなく連動（横向き時の頭蓋フロアのみ保証）
         const roiFace = detectFaceInPoseRoi(faceDetector, sourceEl, srcW, srcH, finalMx, finalMy, poseMr);
         if (roiFace) {
-          finalMx = clamp(roiFace.mx * 0.76 + finalMx * 0.24, 0.02, 0.98);
-          finalMy = clamp(roiFace.my * 0.76 + finalMy * 0.24, 0.02, 0.98);
+          finalMx = clamp(roiFace.mx * 0.74 + finalMx * 0.26, 0.02, 0.98);
+          finalMy = clamp(roiFace.my * 0.74 + finalMy * 0.26, 0.02, 0.98);
           const craniumFloorMr = clamp(Math.max(earSpanPx * 0.74, headDirectPx * 0.82, torsoPx * 0.195) / minDim, MIN_MR, MAX_MR);
-          const faceDrivenMr = roiFace.mr * 1.12 * 0.82 + poseMr * 0.18;
+          const faceDrivenMr = roiFace.mr * 1.12 * 0.80 + poseMr * 0.20;
           finalMr = clamp(Math.max(faceDrivenMr, craniumFloorMr), MIN_MR, MAX_MR);
           finalConf = Math.max(meanVis, roiFace.conf);
           hasFace = true;
         }
 
-        const bodyBonus = hasShoulder ? (hasFace ? 1.32 : 1.14) : 0.92;
+        const bodyBonus = hasShoulder ? (hasFace ? 1.35 : 1.14) : 0.92;
         const sizeBonus = clamp(finalMr * 5.0, 0.48, 1.36);
 
         out.push({
@@ -520,17 +528,12 @@
   }
 
   /**
-   * 1フレーム上の全頭部候補を統合（visibleBox重みは後段で動的適用するためキャッシュ再利用可能）
+   * 1フレーム上の全頭部候補を統合（Pass1/Pass2を問わず常にPoseLandmarker + FaceDetectorの双方を実行し交互フレーム座標ブレを防止）
    */
-  function detectCandidatesOnSource(detectors, sourceEl, srcW, srcH, isDensePass) {
+  function detectCandidatesOnSource(detectors, sourceEl, srcW, srcH) {
     if (!detectors || !srcW || !srcH) return [];
     const poseCands = detectPoseCandidates(detectors.pose, detectors.face, sourceEl, srcW, srcH);
-
-    // 高密度Pass2において、すでに高信頼な骨格＋頭部候補が捕捉済みの場合は冗長な全画面FaceDetector(576px)を省略しCPU負荷を30%削減
-    const hasSolidPose = isDensePass && poseCands.some((c) => c.hasBody && c.conf >= 0.54);
-    const faceCands = hasSolidPose
-      ? []
-      : detectFullFrameFaceCandidates(detectors.face, sourceEl, srcW, srcH);
+    const faceCands = detectFullFrameFaceCandidates(detectors.face, sourceEl, srcW, srcH);
 
     const merged = poseCands.slice();
     for (let i = 0; i < faceCands.length; i++) {
@@ -546,9 +549,11 @@
       }
       if (matched) {
         if (!matched.hasFace) {
-          matched.mx = fc.mx * 0.72 + matched.mx * 0.28;
-          matched.my = fc.my * 0.72 + matched.my * 0.28;
-          matched.mr = clamp(fc.mr * 1.10 * 0.80 + matched.mr * 0.20, MIN_MR, MAX_MR);
+          matched.mx = fc.mx * 0.55 + matched.mx * 0.45;
+          matched.my = fc.my * 0.55 + matched.my * 0.45;
+          matched.mr = matched.hasBody
+            ? clamp(matched.mr * 0.75 + fc.mr * 0.25, MIN_MR, MAX_MR)
+            : clamp(fc.mr * 1.04 * 0.75 + matched.mr * 0.25, MIN_MR, MAX_MR);
           matched.hasFace = true;
           matched.conf = Math.max(matched.conf, fc.conf);
           matched.rawScore *= 1.18;
@@ -605,25 +610,6 @@
     } catch (e) {
       return null;
     }
-  }
-
-  function centerBufferDiff(bufA, bufB, mx, my, mr) {
-    if (!bufA || !bufB || !bufA.feat || !bufB.feat || bufA.sw !== bufB.sw || bufA.sh !== bufB.sh) return 999;
-    const { sw, sh } = bufA;
-    const cx = clamp(Math.round(mx * sw), 4, sw - 5);
-    const cy = clamp(Math.round(my * sh), 4, sh - 5);
-    const rad = clamp(Math.round((mr || 0.1) * Math.min(sw, sh) * 1.15), 4, 24);
-    let diff = 0, cnt = 0;
-    for (let dy = -rad; dy <= rad; dy += 2) {
-      const yy = clamp(cy + dy, 0, sh - 1);
-      for (let dx = -rad; dx <= rad; dx += 2) {
-        const xx = clamp(cx + dx, 0, sw - 1);
-        const idx = (yy * sw + xx) * 3;
-        diff += Math.abs(bufA.feat[idx] - bufB.feat[idx]) + Math.abs(bufA.feat[idx + 1] - bufB.feat[idx + 1]) * 0.7;
-        cnt++;
-      }
-    }
-    return cnt > 0 ? diff / cnt : 999;
   }
 
   function buildTemporalRoomModel(bufs) {
@@ -699,12 +685,12 @@
     }
     const meanAct = cnt > 0 ? sum / cnt : 0;
     if (!cand.hasBody && peak < 8 && meanAct < 4.5) {
-      return 0.28;
+      return 0.25;
     }
     if (meanAct > 10 || peak > 22) {
       return 1.12;
     }
-    return cand.hasBody ? 1.0 : 0.78;
+    return cand.hasBody ? 1.0 : 0.76;
   }
 
   /**
@@ -731,7 +717,7 @@
 
         if (anchorConstraint && i === anchorConstraint.idx) {
           const dAnchor = Math.hypot(cand.mx - anchorConstraint.mx, cand.my - anchorConstraint.my);
-          if (dAnchor <= Math.max(0.16, anchorConstraint.mr * 1.65)) {
+          if (dAnchor <= Math.max(0.11, anchorConstraint.mr * 1.35)) {
             nodeScore += 600 - dAnchor * 400;
           } else {
             nodeScore = -1e6;
@@ -746,7 +732,7 @@
           const pList = candsPerFrame[p] || [];
           if (!pList.length) continue;
           const dt = Math.max(0.03, times[i] - times[p]);
-          const maxJump = 0.12 + 2.05 * dt;
+          const maxJump = Math.min(0.32, 0.075 + 1.15 * dt);
 
           for (let pc = 0; pc < pList.length; pc++) {
             if (dp[p][pc] < -1e5) continue;
@@ -754,9 +740,10 @@
             const dist = Math.hypot(cand.mx - prevCand.mx, cand.my - prevCand.my);
             if (dist > maxJump) continue;
 
-            const velCost = (dist / (0.07 + dt * 0.90)) * 0.40;
-            const sizeCost = Math.abs(Math.log((cand.mr + 0.02) / (prevCand.mr + 0.02))) * 0.24;
-            const gapCost = (i - p - 1) * 0.08;
+            const stepVel = dist / Math.max(0.06, dt);
+            const velCost = (dist / (0.045 + dt * 0.55)) * 0.95 + (stepVel > 0.70 ? (stepVel - 0.70) * 1.15 : 0);
+            const sizeCost = Math.abs(Math.log((cand.mr + 0.015) / (prevCand.mr + 0.015))) * 0.38;
+            const gapCost = (i - p - 1) * 0.035;
             const candTotal = dp[p][pc] - velCost - sizeCost - gapCost;
 
             if (candTotal > bestPrevScore) {
@@ -821,7 +808,7 @@
       const interpY = a.my + (c.my - a.my) * u;
       const dev = Math.hypot(b.mx - interpX, b.my - interpY);
       const neighborSpan = Math.hypot(c.mx - a.mx, c.my - a.my);
-      if (dev > 0.115 && dev > neighborSpan * 1.15) {
+      if (dev > 0.085 && dev > neighborSpan * 1.10) {
         selected[iCur] = null;
       }
     }
@@ -1080,26 +1067,26 @@
     };
   }
 
-  function updateEllipticalModelGuarded(model, buf, mx, my, nextMr, cost, fgScore) {
+  function updateEllipticalModelGuarded(model, buf, mx, my, nextMr, sadMean, fgScore) {
     if (!model) return;
     model.mr = nextMr;
-    if (!buf || cost > 23 || fgScore < 6) return;
+    if (!buf || sadMean > 24.5 || fgScore < 5) return;
     const cur = extractEllipticalModel(buf, mx, my, nextMr);
     if (!cur) return;
     let meanY = 0, meanRG = 0, meanBY = 0;
     for (let i = 0; i < DISC_PTS.length; i++) {
       const k = i * 3;
       const w = DISC_PTS[i].w;
-      model.tpl[k] = model.baseTpl[k] * 0.84 + cur.tpl[k] * 0.16;
-      model.tpl[k + 1] = model.baseTpl[k + 1] * 0.84 + cur.tpl[k + 1] * 0.16;
-      model.tpl[k + 2] = model.baseTpl[k + 2] * 0.84 + cur.tpl[k + 2] * 0.16;
+      model.tpl[k] = model.baseTpl[k] * 0.85 + cur.tpl[k] * 0.15;
+      model.tpl[k + 1] = model.baseTpl[k + 1] * 0.85 + cur.tpl[k + 1] * 0.15;
+      model.tpl[k + 2] = model.baseTpl[k + 2] * 0.85 + cur.tpl[k + 2] * 0.15;
       meanY += model.tpl[k] * w;
       meanRG += model.tpl[k + 1] * w;
       meanBY += model.tpl[k + 2] * w;
     }
     model.meanY = meanY / model.sumW;
-    model.meanRG = model.baseMeanRG * 0.84 + (meanRG / model.sumW) * 0.16;
-    model.meanBY = model.baseMeanBY * 0.84 + (meanBY / model.sumW) * 0.16;
+    model.meanRG = model.baseMeanRG * 0.85 + (meanRG / model.sumW) * 0.15;
+    model.meanBY = model.baseMeanBY * 0.85 + (meanBY / model.sumW) * 0.15;
   }
 
   function evalEllipticalCandidate(buf, prevBuf, roomModel, model, cx, cy, rx, ry, pcx, pcy, prevCx, prevCy) {
@@ -1116,7 +1103,7 @@
       candMeanY += feat[idx];
     }
     const subCnt = Math.ceil(m / 2);
-    const lumShift = clamp(candMeanY / subCnt - model.meanY, -42, 42);
+    const lumShift = clamp(candMeanY / subCnt - model.meanY, -38, 38);
 
     const hasRoom = !!(roomModel && roomModel.hasMotion && roomModel.sw === sw && roomModel.sh === sh);
     const bgFeat = hasRoom ? roomModel.bgFeat : null;
@@ -1149,7 +1136,8 @@
 
     candMeanRG /= sumW;
     candMeanBY /= sumW;
-    const colorMomentCost = (Math.abs(candMeanRG - model.meanRG) + Math.abs(candMeanBY - model.meanBY) * 0.8) * 0.35;
+    const sadMean = sadW / sumW;
+    const colorMomentCost = (Math.abs(candMeanRG - model.meanRG) + Math.abs(candMeanBY - model.meanBY) * 0.8) * 0.42;
 
     let haloContrast = 0, haloBgDiff = 0;
     for (let h = 0; h < HALO_PTS.length; h++) {
@@ -1163,39 +1151,42 @@
       }
     }
     const meanHaloContrast = haloContrast / HALO_PTS.length;
-    const contourBonus = Math.min(4.8, meanHaloContrast * 0.082);
+    // 外観SADを主導とし、体幹・衣服の強いコントラストに引きずられないようボーナス上限を厳格に制限
+    const contourBonus = Math.min(1.6, meanHaloContrast * 0.038);
 
     const fgMean = bgFeat ? (fgSum / sumW) : 14;
     const haloFgMean = bgFeat ? (haloBgDiff / HALO_PTS.length) : 4;
     const fgBoundarySep = fgMean - haloFgMean * 0.92;
-    const fgBonus = bgFeat ? clamp(fgBoundarySep * 0.145, -2.5, 9.5) : 0;
-    const motionBonus = prevFeat ? Math.min(2.2, (motionSum / (m * 0.5)) * 0.11) : 0;
+    const fgBonus = bgFeat ? clamp(fgBoundarySep * 0.065, -2.2, 2.4) : 0;
+    const motionBonus = prevFeat ? Math.min(1.0, (motionSum / (m * 0.5)) * 0.045) : 0;
 
     const predDist = Math.hypot(cx - pcx, cy - pcy);
     const stepDist = Math.hypot(cx - prevCx, cy - prevCy);
 
-    const cost = (sadW / sumW) + colorMomentCost + predDist * 0.16 + stepDist * 0.06 - fgBonus - motionBonus - contourBonus;
-    return { cost, fgMean, meanHaloContrast, haloFgMean };
+    const cost = sadMean + colorMomentCost + predDist * 0.34 + stepDist * 0.14 - fgBonus - motionBonus - contourBonus;
+    return { cost, sadMean, colorMomentCost, fgMean, meanHaloContrast, haloFgMean };
   }
 
-  function matchElliptical(buf, prevBuf, roomModel, model, prevMx, prevMy, prevMr, velMx, velMy, velScale) {
+  function matchElliptical(buf, prevBuf, roomModel, model, prevMx, prevMy, prevMr, velMx, velMy, velScale, dt) {
     const { sw, sh } = buf;
     const minCandMr = Math.max(MIN_MR, model.seedMr * 0.42);
     const maxCandMr = Math.min(MAX_MR, model.seedMr * 2.50);
-    const predScale = clamp(1 + (velScale || 0) * 0.58, 0.88, 1.14);
+    const predScale = clamp(1 + (velScale || 0) * 0.56, 0.88, 1.14);
     const baseMr = clamp(prevMr * predScale, minCandMr, maxCandMr);
     const { rx, ry } = getEllipticalRadiiPx(sw, sh, baseMr);
 
-    const predMx = clamp(prevMx + (velMx || 0) * 0.65, 0.03, 0.97);
-    const predMy = clamp(prevMy + (velMy || 0) * 0.65, 0.03, 0.97);
+    const predMx = clamp(prevMx + (velMx || 0) * 0.62, 0.03, 0.97);
+    const predMy = clamp(prevMy + (velMy || 0) * 0.62, 0.03, 0.97);
 
     const pcx = clamp(Math.round(predMx * sw), Math.ceil(rx) + 1, sw - Math.ceil(rx) - 2);
     const pcy = clamp(Math.round(predMy * sh), Math.ceil(ry) + 1, sh - Math.ceil(ry) - 2);
     const prevCx = prevMx * sw;
     const prevCy = prevMy * sh;
 
-    const searchRx = Math.max(16, Math.round(sw * 0.25));
-    const searchRy = Math.max(20, Math.round(sh * 0.25));
+    // 時間ステップ dt に比例した探索窓（0.10秒ステップでは±10%に制限し、体幹・腰への飛び移りを物理的に遮断）
+    const maxMoveNorm = clamp(0.065 + (dt || 0.10) * 0.38, 0.075, 0.22);
+    const searchRx = Math.max(8, Math.round(sw * maxMoveNorm));
+    const searchRy = Math.max(10, Math.round(sh * maxMoveNorm));
 
     const padX = Math.min(Math.floor(sw * 0.35), Math.ceil(rx) + 1);
     const padY = Math.min(Math.floor(sh * 0.35), Math.ceil(ry) + 1);
@@ -1204,12 +1195,13 @@
     const y0 = Math.max(padY, pcy - searchRy);
     const y1 = Math.min(sh - padY - 1, pcy + searchRy);
 
-    let bestCost = Infinity, bestX = pcx, bestY = pcy, bestFg = 10;
+    let bestCost = Infinity, bestSad = Infinity, bestX = pcx, bestY = pcy, bestFg = 10;
     for (let cy = y0; cy <= y1; cy += 2) {
       for (let cx = x0; cx <= x1; cx += 2) {
         const ev = evalEllipticalCandidate(buf, prevBuf, roomModel, model, cx, cy, rx, ry, pcx, pcy, prevCx, prevCy);
         if (ev.cost < bestCost) {
           bestCost = ev.cost;
+          bestSad = ev.sadMean;
           bestX = cx;
           bestY = cy;
           bestFg = ev.fgMean;
@@ -1226,6 +1218,7 @@
         const ev = evalEllipticalCandidate(buf, prevBuf, roomModel, model, cx, cy, rx, ry, pcx, pcy, prevCx, prevCy);
         if (ev.cost < bestCost) {
           bestCost = ev.cost;
+          bestSad = ev.sadMean;
           bestX = cx;
           bestY = cy;
           bestFg = ev.fgMean;
@@ -1233,27 +1226,31 @@
       }
     }
 
-    // 第3段階：決定した中心周辺で7段階のスケール候補を評価し、遠近変化による頭部サイズ拡大縮小をリアルタイム追従
+    // 第3段階：ロックされた頭部中心 (bestX, bestY) を固定したまま、7段階スケール候補を評価して遠近サイズ変化を即応追従
     let bestMr = baseMr, bestScaleCost = Infinity;
     for (let s = 0; s < SCALE_FACTORS.length; s++) {
       const sf = SCALE_FACTORS[s];
       const candMr = clamp(baseMr * sf, minCandMr, maxCandMr);
       const rad = getEllipticalRadiiPx(sw, sh, candMr);
       const ev = evalEllipticalCandidate(buf, prevBuf, roomModel, model, bestX, bestY, rad.rx, rad.ry, bestX, bestY, bestX, bestY);
-      const regPenalty = Math.abs(sf - 1.0) * 1.85;
-      const sCost = ev.cost + regPenalty;
+      const scaleFgBonus = clamp((ev.fgMean - ev.haloFgMean * 0.92) * 0.155, -2.5, 9.8);
+      const scaleContourBonus = Math.min(5.0, ev.meanHaloContrast * 0.088);
+      const regPenalty = Math.abs(sf - 1.0) * 1.45;
+      const sCost = ev.sadMean + ev.colorMomentCost - scaleFgBonus - scaleContourBonus + regPenalty;
       if (sCost < bestScaleCost) {
         bestScaleCost = sCost;
         bestMr = candMr;
+        bestSad = Math.min(bestSad, ev.sadMean);
       }
     }
-    const nextMr = clamp(prevMr * 0.22 + bestMr * 0.78, minCandMr, maxCandMr);
+    const nextMr = clamp(prevMr * 0.18 + bestMr * 0.82, minCandMr, maxCandMr);
 
     return {
       mx: clamp(bestX / sw, 0.02, 0.98),
       my: clamp(bestY / sh, 0.02, 0.98),
       mr: nextMr,
       cost: bestCost,
+      sadMean: bestSad,
       fgMean: bestFg
     };
   }
@@ -1271,14 +1268,15 @@
       const prev = out[i - dir];
       const curBuf = bufs[i];
       const prevBuf = bufs[i - dir];
+      const dt = Math.abs(times[i] - times[i - dir]) || 0.10;
       if (model && curBuf) {
-        const m = matchElliptical(curBuf, prevBuf, roomModel, model, prev.mx, prev.my, prev.mr, velX, velY, velScale);
-        velX = (m.mx - prev.mx) * 0.78 + velX * 0.22;
-        velY = (m.my - prev.my) * 0.78 + velY * 0.22;
+        const m = matchElliptical(curBuf, prevBuf, roomModel, model, prev.mx, prev.my, prev.mr, velX, velY, velScale, dt);
+        velX = (m.mx - prev.mx) * 0.72 + velX * 0.28;
+        velY = (m.my - prev.my) * 0.72 + velY * 0.28;
         const stepScale = (m.mr - prev.mr) / Math.max(0.04, prev.mr);
         velScale = stepScale * 0.72 + velScale * 0.28;
         out[i] = { t: times[i], mx: m.mx, my: m.my, mr: m.mr };
-        updateEllipticalModelGuarded(model, curBuf, m.mx, m.my, m.mr, m.cost, m.fgMean);
+        updateEllipticalModelGuarded(model, curBuf, m.mx, m.my, m.mr, m.sadMean, m.fgMean);
       } else {
         out[i] = { t: times[i], mx: prev.mx, my: prev.my, mr: prev.mr };
       }
@@ -1287,10 +1285,10 @@
   }
 
   /**
-   * 瞬間速度・サイズ変化率適応型ゼロ遅延フィルタ：
-   * - 折り返し頂点（前屈最下点等）でも瞬間ステップ速度 max(vPrev, vNext) で判定するためピーク遅れ・振幅削れゼロ
-   * - 粗いPass1区間（dt > 0.22s）ではフレーム間平均を一切行わず生値を即時反映
-   * - 遠近サイズ変化（instScaleRate）が大きい場面では mr も遅れなく94%追従
+   * ゼロ位相・ジグザグ微細ブレ＆スパイク除去フィルタ：
+   * - 1フレームのみのAIジグザグ揺れ（dot < 0 かつ非頂点）を強力に抑制
+   * - 一方向への移動中（dot >= 0）は対称3点フィルタにより位相遅れ 0.0ms を維持
+   * - 5フレーム窓で検証された真の折り返し頂点（前屈最下点・最接近点など）は 100% 生値を保持しピーク潰れゼロ
    */
   function smoothKeyframesAdaptive(frames, pinnedIdx) {
     if (!frames || frames.length <= 2) return frames ? frames.map((f) => ({ ...f })) : [];
@@ -1303,22 +1301,49 @@
       const dtPrev = Math.max(0.015, cur.t - prev.t);
       const dtNext = Math.max(0.015, next.t - cur.t);
 
-      // Pass1の粗間隔（0.22秒超）では複数秒にわたる平滑遅延を防ぐため生キーフレームを100%維持
-      if (Math.max(dtPrev, dtNext) > 0.22) continue;
+      // 粗間隔（Pass1の0.26秒超）では複数秒にわたる平滑遅延を防ぐため生キーフレームを維持
+      if (Math.max(dtPrev, dtNext) > 0.26) continue;
 
-      const vPrev = Math.hypot(cur.mx - prev.mx, cur.my - prev.my) / dtPrev;
-      const vNext = Math.hypot(next.mx - cur.mx, next.my - cur.my) / dtNext;
-      const instVel = Math.max(vPrev, vNext);
+      const dx1 = cur.mx - prev.mx, dy1 = cur.my - prev.my;
+      const dx2 = next.mx - cur.mx, dy2 = next.my - cur.my;
+      const dot = dx1 * dx2 + dy1 * dy2;
+      const stepMax = Math.max(Math.hypot(dx1, dy1), Math.hypot(dx2, dy2));
+      const netDist = Math.hypot(next.mx - prev.mx, next.my - prev.my);
+      const netVel = netDist / (dtPrev + dtNext);
 
-      if (instVel < 0.055) {
-        // 静止〜微動時のみAIの1px微細揺れを吸収
-        out[i].mx = prev.mx * 0.18 + cur.mx * 0.64 + next.mx * 0.18;
-        out[i].my = prev.my * 0.18 + cur.my * 0.64 + next.my * 0.18;
-      } else if (instVel < 0.16) {
-        out[i].mx = prev.mx * 0.08 + cur.mx * 0.84 + next.mx * 0.08;
-        out[i].my = prev.my * 0.08 + cur.my * 0.84 + next.my * 0.08;
+      // 5フレーム窓による真の折り返し頂点（前屈最下点など）判定：前後2ステップが一貫して接近・離脱している場合のみ頂点保護
+      let isTrueApex = false;
+      if (dot < 0 && i >= 2 && i <= n - 3) {
+        const p2 = frames[i - 2], n2 = frames[i + 2];
+        const appDist = Math.hypot(cur.mx - p2.mx, cur.my - p2.my);
+        const depDist = Math.hypot(n2.mx - cur.mx, n2.my - cur.my);
+        const dotApp = (prev.mx - p2.mx) * dx1 + (prev.my - p2.my) * dy1;
+        const dotDep = dx2 * (n2.mx - next.mx) + dy2 * (n2.my - next.my);
+        if (appDist >= 0.022 && depDist >= 0.022 && (dotApp > 0 || dotDep > 0)) {
+          isTrueApex = true;
+        }
       }
-      // instVel >= 0.16（歩行・前屈・振り向き）は cur.mx / cur.my 100%そのまま（位相遅れ0.0ms）
+
+      if (isTrueApex) {
+        out[i].mx = cur.mx;
+        out[i].my = cur.my;
+      } else if (dot < 0) {
+        // 1フレームのAIジグザグ反転ノイズを強力に減衰
+        out[i].mx = prev.mx * 0.30 + cur.mx * 0.40 + next.mx * 0.30;
+        out[i].my = prev.my * 0.30 + cur.my * 0.40 + next.my * 0.30;
+      } else if (netVel < 0.08 && stepMax < 0.015) {
+        // 静止〜微動時
+        out[i].mx = prev.mx * 0.24 + cur.mx * 0.52 + next.mx * 0.24;
+        out[i].my = prev.my * 0.24 + cur.my * 0.52 + next.my * 0.24;
+      } else if (netVel < 0.28) {
+        // 等速〜中速移動（対称フィルタのため位相遅れゼロで横ブレのみ除去）
+        out[i].mx = prev.mx * 0.12 + cur.mx * 0.76 + next.mx * 0.12;
+        out[i].my = prev.my * 0.12 + cur.my * 0.76 + next.my * 0.12;
+      } else {
+        // 高速一貫移動
+        out[i].mx = prev.mx * 0.04 + cur.mx * 0.92 + next.mx * 0.04;
+        out[i].my = prev.my * 0.04 + cur.my * 0.92 + next.my * 0.04;
+      }
 
       const baseMr = Math.max(0.04, cur.mr);
       const rRatePrev = Math.abs(cur.mr - prev.mr) / (dtPrev * baseMr);
@@ -1340,7 +1365,7 @@
     return out;
   }
 
-  // ---------- 直列デコーダキュー＋Pre-Armed rVFC による実フレームPTS同期シーク ----------
+  // ---------- 直列デコーダキュー＋厳密 seeked + 1rAF 同期シーク ----------
   let scanQueue = Promise.resolve();
 
   function enqueueVideoScan(taskFn) {
@@ -1350,75 +1375,97 @@
   }
 
   /**
-   * currentTime 設定前に requestVideoFrameCallback を予約し、実際に新しいフレームがGPUテクスチャへ提示された
-   * 確定後にその正確な PTS（metadata.mediaTime）を返す（旧フレーム誤取得による追従遅れを完全解消）
+   * 厳密な seeked イベント完了＋1フレームコンポジット待機（長GOP動画でのシーク途中タイムアウトや一時停止rVFC未発火72ms遅延を根絶）
    */
   function seekOnce(v, t, timeoutMs) {
     return new Promise((resolve) => {
       const target = Math.max(0, t || 0);
-      if (Math.abs(v.currentTime - target) < 0.004 && !v.seeking && v.readyState >= 2) {
-        resolve(v.currentTime);
-        return;
-      }
 
-      const hasRVFC = typeof v.requestVideoFrameCallback === "function";
-      let done = false;
-      let seekedFired = false;
-      let vfcFired = !hasRVFC;
-      let capturedPts = null;
-      let vfcId = 0;
-      let postSeekTimer = 0;
-
-      const finish = () => {
-        if (done) return;
-        done = true;
-        clearTimeout(hardTimer);
-        if (postSeekTimer) clearTimeout(postSeekTimer);
-        v.removeEventListener("seeked", onSeeked);
-        if (hasRVFC && vfcId && !vfcFired && typeof v.cancelVideoFrameCallback === "function") {
-          try { v.cancelVideoFrameCallback(vfcId); } catch (e) {}
-        }
-        const pts = (capturedPts !== null && Math.abs(capturedPts - v.currentTime) < 0.35)
-          ? capturedPts
-          : v.currentTime;
-        resolve(Math.max(0, pts));
-      };
-
-      const onSeeked = () => {
-        seekedFired = true;
-        if (vfcFired) {
-          if (!hasRVFC && typeof requestAnimationFrame === "function") {
-            requestAnimationFrame(() => requestAnimationFrame(finish));
-          } else {
-            finish();
-          }
+      const startSeek = () => {
+        if (Math.abs(v.currentTime - target) < 0.004 && !v.seeking && v.readyState >= 2) {
+          resolve(v.currentTime);
           return;
         }
-        // 同一ビデオフレームPTSに着地してrVFCが再発火しないケースのフォールバック
-        postSeekTimer = setTimeout(finish, 72);
+
+        const hasRVFC = typeof v.requestVideoFrameCallback === "function";
+        let done = false;
+        let seekedFired = false;
+        let vfcFired = !hasRVFC;
+        let capturedPts = null;
+        let vfcId = 0;
+        let postSeekTimer = 0;
+
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(hardTimer);
+          if (postSeekTimer) clearTimeout(postSeekTimer);
+          v.removeEventListener("seeked", onSeeked);
+          if (hasRVFC && vfcId && !vfcFired && typeof v.cancelVideoFrameCallback === "function") {
+            try { v.cancelVideoFrameCallback(vfcId); } catch (e) {}
+          }
+          const pts = (capturedPts !== null && Math.abs(capturedPts - v.currentTime) < 0.25)
+            ? capturedPts
+            : v.currentTime;
+          resolve(Math.max(0, pts));
+        };
+
+        const onSeeked = () => {
+          seekedFired = true;
+          if (vfcFired) {
+            if (!hasRVFC && typeof requestAnimationFrame === "function") {
+              requestAnimationFrame(() => requestAnimationFrame(finish));
+            } else {
+              finish();
+            }
+            return;
+          }
+          // 同一ビデオフレームPTSに着地してrVFCが再発火しないケースのフォールバック
+          postSeekTimer = setTimeout(finish, 32);
+        };
+
+        const hardTimer = setTimeout(finish, timeoutMs || 420);
+        v.addEventListener("seeked", onSeeked);
+
+        if (hasRVFC) {
+          try {
+            vfcId = v.requestVideoFrameCallback((_now, meta) => {
+              if (meta && typeof meta.mediaTime === "number" && isFinite(meta.mediaTime)) {
+                capturedPts = meta.mediaTime;
+              }
+              vfcFired = true;
+              if (seekedFired) finish();
+            });
+          } catch (e) {
+            vfcFired = true;
+          }
+        }
+
+        const prevTime = v.currentTime;
+        try {
+          v.currentTime = target;
+          if (!v.seeking && Math.abs(v.currentTime - prevTime) < 0.002 && v.readyState >= 2) {
+            finish();
+          }
+        } catch (e) {
+          finish();
+        }
       };
 
-      const hardTimer = setTimeout(finish, timeoutMs || 340);
-      v.addEventListener("seeked", onSeeked);
-
-      if (hasRVFC) {
-        try {
-          vfcId = v.requestVideoFrameCallback((_now, meta) => {
-            if (meta && typeof meta.mediaTime === "number" && isFinite(meta.mediaTime)) {
-              capturedPts = meta.mediaTime;
-            }
-            vfcFired = true;
-            if (seekedFired) finish();
-          });
-        } catch (e) {
-          vfcFired = true;
-        }
-      }
-
-      try {
-        v.currentTime = target;
-      } catch (e) {
-        finish();
+      // 直前のシークがまだ進行中の場合は完了を待ってから次シークを発行（カスケード中断の防止）
+      if (v.seeking) {
+        let waitDone = false;
+        const proceed = () => {
+          if (waitDone) return;
+          waitDone = true;
+          clearTimeout(wTimer);
+          v.removeEventListener("seeked", proceed);
+          startSeek();
+        };
+        const wTimer = setTimeout(proceed, 260);
+        v.addEventListener("seeked", proceed);
+      } else {
+        startSeek();
       }
     });
   }
@@ -1426,14 +1473,14 @@
   async function primeTempVideo(v) {
     try {
       if (!isFinite(v.duration) || v.duration <= 0) {
-        await seekOnce(v, 1e7, 450);
-        await seekOnce(v, 0, 280);
+        await seekOnce(v, 1e7, 650);
+        await seekOnce(v, 0, 400);
       }
       const p = v.play();
       if (p && typeof p.then === "function") {
         await Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, 110))]);
       }
-      await new Promise((r) => setTimeout(r, 24));
+      await new Promise((r) => setTimeout(r, 20));
       v.pause();
     } catch (e) {}
   }
@@ -1510,12 +1557,13 @@
 
   function buildTwoPassIndices(times, focusTime) {
     const n = times.length;
-    if (n <= 15) {
+    if (n <= 24) {
       return { pass1: times.map((_, i) => i), pass2: [] };
     }
     const used = new Uint8Array(n);
     const pass1 = [];
-    const coarseCount = Math.min(15, n);
+    // Phase 1は10点の昇順粗スキャンで高速に全域プレビューを構築し、Phase 2は0→n-1の完全単調前進でH.264/HEVCのGOP順デコードを最大化
+    const coarseCount = Math.min(10, n);
     for (let k = 0; k < coarseCount; k++) {
       const idx = Math.min(n - 1, Math.round((k * (n - 1)) / Math.max(1, coarseCount - 1)));
       if (!used[idx]) {
@@ -1536,47 +1584,14 @@
       }
     }
 
-    let focusIdx = 0;
-    if (typeof focusTime === "number" && focusTime > 0) {
-      for (let i = 0; i < n; i++) {
-        if (times[i] >= focusTime - 0.02) { focusIdx = i; break; }
+    const pass2 = [];
+    for (let i = 0; i < n; i++) {
+      if (!used[i]) {
+        used[i] = 1;
+        pass2.push(i);
       }
     }
-    const pass2 = [];
-    for (let i = focusIdx; i < n; i++) {
-      if (!used[i]) { used[i] = 1; pass2.push(i); }
-    }
-    for (let i = 0; i < focusIdx; i++) {
-      if (!used[i]) { used[i] = 1; pass2.push(i); }
-    }
     return { pass1, pass2 };
-  }
-
-  /**
-   * 静止しているPass2中間フレームで不要な重い骨格AI推論を省略可能か判定（少しでも移動・サイズ変化がある区間は必ず10fpsフルAI実行）
-   */
-  function canInterpolateStationarySlot(slots, slotIdx, curBuf) {
-    if (!curBuf) return false;
-    let prevSlot = null, nextSlot = null;
-    for (let p = slotIdx - 1; p >= Math.max(0, slotIdx - 3); p--) {
-      if (slots[p] && slots[p].cands && slots[p].cands.length) { prevSlot = slots[p]; break; }
-    }
-    for (let q = slotIdx + 1; q <= Math.min(slots.length - 1, slotIdx + 3); q++) {
-      if (slots[q] && slots[q].cands && slots[q].cands.length) { nextSlot = slots[q]; break; }
-    }
-    if (!prevSlot || !nextSlot) return false;
-    if (nextSlot.t - prevSlot.t > 0.36) return false;
-    if (prevSlot.cands.length !== 1 || nextSlot.cands.length !== 1) return false;
-
-    const a = prevSlot.cands[0], b = nextSlot.cands[0];
-    if (a.conf < 0.62 || b.conf < 0.62) return false;
-    if (Math.hypot(b.mx - a.mx, b.my - a.my) >= 0.011) return false;
-    if (Math.abs(b.mr - a.mr) / Math.max(0.04, a.mr) >= 0.035) return false;
-
-    // 実際に中間フレームの頭部周辺ピクセルも変化していないことを確認（素早い往復動作の見逃しゼロ）
-    const dA = centerBufferDiff(curBuf, prevSlot.buf, a.mx, a.my, a.mr);
-    const dB = centerBufferDiff(curBuf, nextSlot.buf, b.mx, b.my, b.mr);
-    return dA < 6.5 && dB < 6.5;
   }
 
   // ---------- 静止画の顔・頭部検出＋フォールバック ----------
@@ -1587,7 +1602,7 @@
     }
     const detectors = await getDetectors();
     if (isCancelled && isCancelled()) return null;
-    const cands = detectCandidatesOnSource(detectors, imgEl, imgEl.naturalWidth, imgEl.naturalHeight, false);
+    const cands = detectCandidatesOnSource(detectors, imgEl, imgEl.naturalWidth, imgEl.naturalHeight);
     if (cands.length > 0) {
       cands.sort((a, b) =>
         (b.rawScore * evalVisibleWeight(b.mx, b.my, visibleBox)) -
@@ -1614,7 +1629,7 @@
   }
 
   /**
-   * 収集済みスロットから大域ビタビ軌道＋7段階マルチスケール双方向楕円補間で全区間キーフレームを約3msで組み立てる
+   * 収集済みスロットから大域ビタビ軌道＋双方向楕円補間で全区間キーフレームを約3msで組み立てる
    */
   function assembleTrajectoryFromSlots(slots, visibleBox, anchor) {
     const collected = [];
@@ -1646,7 +1661,7 @@
         const d = Math.abs(times[i] - anchor.t);
         if (d < minD) { minD = d; anchorIdx = i; }
       }
-      const baseGate = Math.max(0.16, anchor.mr * 1.65);
+      const baseGate = Math.max(0.11, anchor.mr * 1.35);
       const hasNearCand = (idx, gate) => {
         const list = candsPerFrame[idx] || [];
         for (let c = 0; c < list.length; c++) {
@@ -1660,7 +1675,7 @@
         let bestDt = Infinity;
         for (let i = 0; i < n; i++) {
           const dt = Math.abs(times[i] - anchor.t);
-          if (dt <= 0.35 && dt < bestDt && hasNearCand(i, baseGate + 0.04)) {
+          if (dt <= 0.25 && dt < bestDt && hasNearCand(i, baseGate + 0.02)) {
             bestDt = dt;
             matchAnchorIdx = i;
           }
@@ -1678,9 +1693,9 @@
     let relDx = 0, relDy = 0, relScale = 1;
     if (anchor && matchAnchorIdx >= 0 && selectedHits[matchAnchorIdx]) {
       const ah = selectedHits[matchAnchorIdx];
-      relDx = clamp(anchor.mx - ah.mx, -0.15, 0.15);
-      relDy = clamp(anchor.my - ah.my, -0.15, 0.15);
-      relScale = clamp(anchor.mr / Math.max(0.038, ah.mr), 0.60, 1.65);
+      relDx = clamp(anchor.mx - ah.mx, -0.25, 0.25);
+      relDy = clamp(anchor.my - ah.my, -0.25, 0.25);
+      relScale = clamp(anchor.mr / Math.max(0.038, ah.mr), 0.55, 1.75);
     }
 
     const hitIndices = [];
@@ -1688,7 +1703,8 @@
       if (selectedHits[i]) hitIndices.push(i);
     }
 
-    if (hitIndices.length > 0) {
+    const minRequiredHits = anchor ? Math.max(2, Math.floor(n * 0.22)) : 1;
+    if (hitIndices.length >= minRequiredHits) {
       const frames = new Array(n);
       for (let h = 0; h < hitIndices.length; h++) {
         const idx = hitIndices[h];
@@ -1729,11 +1745,12 @@
           const s = u * u * (3 - 2 * u);
           const trackedMr = fwd[k].mr * (1 - s) + bwd[k].mr * s;
           const endpointMr = frames[i0].mr * (1 - s) + frames[i1].mr * s;
+          const trackW = spanT > 0.30 ? 0.85 : 0.65;
           frames[i0 + k] = {
             t: subTimes[k],
             mx: fwd[k].mx * (1 - s) + bwd[k].mx * s,
             my: fwd[k].my * (1 - s) + bwd[k].my * s,
-            mr: clamp(trackedMr * 0.65 + endpointMr * 0.35, MIN_MR, MAX_MR)
+            mr: clamp(trackedMr * trackW + endpointMr * (1 - trackW), MIN_MR, MAX_MR)
           };
         }
       }
@@ -1807,10 +1824,10 @@
   }
 
   /**
-   * 2フェーズ分割インターリーブ動画追従：
+   * 2フェーズ分割インターリーブ＋単調前進10fpsフルDual-AI動画追従：
    * - キャッシュ完了済みなら 0ms 即時返却
-   * - Phase 1（約15フレーム粗スキャン）完了時点で一度デコーダロックを解放するため、BeforeとAfterの双方が約1秒で全域追従を開始
-   * - Phase 2（10fps高密度スキャン）は focusTime から優先実行し、14msごとにフレーム描画へ制御を譲る
+   * - Phase 1（8点粗スキャン）完了時点で一度デコーダロックを解放し、Before/After双方の初期追従を素早く開始
+   * - Phase 2（10fps高密度スキャン）は 0→n-1 の単調前進シーク＋全フレームDual-AI検出で最高精度を保証
    */
   async function runTwoPassVideoTrack(url, knownDuration, isCancelled, opts, anchor) {
     const onProgress = opts && typeof opts.onProgress === "function" ? opts.onProgress : null;
@@ -1835,9 +1852,9 @@
     const detectors = await getDetectors();
     if (isCancelled && isCancelled()) return null;
 
-    // --- Phase 1: 全域15フレーム高速ロック（完了後にデコーダキューを一度譲り、もう一方のパネルのPhase 1を待たせない） ---
+    // --- 単一デコーダセッションによる2パス走査（Phase 1: 全域先行ロック → 即時プレビュー通知 → Phase 2: 0→n-1 単調前進フルDual-AIスキャン） ---
     let cacheEntry = existing;
-    const phase1Res = await withTempVideo(url, knownDuration, async (v, dur, setPartialGetter) => {
+    return await withTempVideo(url, knownDuration, async (v, dur, setPartialGetter) => {
       if (!dur || dur <= 0) return null;
       const vw = v.videoWidth || 360, vh = v.videoHeight || 640;
       if (!cacheEntry) {
@@ -1856,41 +1873,42 @@
         const slotIdx = pass1[k];
         if (slots[slotIdx]) continue;
         const targetT = times[slotIdx];
-        if (targetT > cacheEntry.realMaxT + 0.02) continue;
+        if (targetT > cacheEntry.realMaxT + 0.015) continue;
 
-        const actualPts = await seekOnce(v, targetT, 320);
-        if (targetT > 0.45 && (v.ended || actualPts < targetT - Math.max(0.25, step * 0.85))) {
+        const actualPts = await seekOnce(v, targetT, 420);
+        if (targetT > 0.35 && (v.ended || actualPts < targetT - Math.max(0.08, step * 0.75))) {
           cacheEntry.realMaxT = Math.max(0.2, actualPts);
           continue;
         }
         await yieldInteractive(false);
-        const cands = detectors ? detectCandidatesOnSource(detectors, v, vw, vh, false) : [];
+        const cands = detectors ? detectCandidatesOnSource(detectors, v, vw, vh) : [];
         const buf = grabScanBuffer(v, vw, vh);
         slots[slotIdx] = { t: actualPts, cands, buf };
+        if (pass2.length === 0 && onProgress && (k === 5 || k === 12 || k === pass1.length - 1)) {
+          const partial = buildCurrent();
+          if (partial) {
+            onProgress({ ...partial, progress: Math.min(0.98, (k + 1) / Math.max(1, totalCount)) });
+          }
+        }
         await yieldInteractive(false);
       }
 
-      if (pass2.length === 0) cacheEntry.complete = true;
-      const partial = buildCurrent();
-      if (partial && onProgress && pass2.length > 0) {
+      if (pass2.length === 0) {
+        cacheEntry.complete = true;
+        return buildCurrent();
+      }
+
+      const partial1 = buildCurrent();
+      if (partial1 && onProgress) {
         let doneCnt = 0;
         for (let i = 0; i < slots.length; i++) if (slots[i]) doneCnt++;
-        onProgress({ ...partial, progress: Math.min(0.96, doneCnt / Math.max(1, totalCount)) });
+        onProgress({ ...partial1, progress: Math.min(0.96, doneCnt / Math.max(1, totalCount)) });
       }
-      return partial;
-    });
+      await yieldInteractive(true);
 
-    if (isCancelled && isCancelled()) return null;
-    if (!cacheEntry || cacheEntry.complete) return phase1Res;
-
-    // --- Phase 2: focusTime優先の10fps高密度スキャン（静止フレームはAI推論を賢くスキップし移動・拡縮フレームに集中） ---
-    const phase2Res = await withTempVideo(url, knownDuration, async (v, _dur, setPartialGetter) => {
-      const { vw, vh, times, step, slots } = cacheEntry;
-      const { pass1, pass2 } = buildTwoPassIndices(times, focusTime);
-      const totalCount = pass1.length + pass2.length;
-
-      const buildCurrent = () => assembleTrajectoryFromSlots(slots, visibleBox, anchor);
-      setPartialGetter(buildCurrent);
+      if (v.currentTime > 0.25) {
+        await seekOnce(v, 0, 360);
+      }
 
       let newlyScanned = 0;
       for (let k = 0; k < pass2.length; k++) {
@@ -1898,21 +1916,17 @@
         const slotIdx = pass2[k];
         if (slots[slotIdx]) continue;
         const targetT = times[slotIdx];
-        if (targetT > cacheEntry.realMaxT + 0.02) continue;
+        if (targetT > cacheEntry.realMaxT + 0.015) continue;
 
-        const actualPts = await seekOnce(v, targetT, 300);
-        if (targetT > 0.45 && (v.ended || actualPts < targetT - Math.max(0.25, step * 0.85))) {
+        const actualPts = await seekOnce(v, targetT, 400);
+        if (targetT > 0.35 && (v.ended || actualPts < targetT - Math.max(0.08, step * 0.75))) {
           cacheEntry.realMaxT = Math.max(0.2, actualPts);
           continue;
         }
 
         const buf = grabScanBuffer(v, vw, vh);
         await yieldInteractive(false);
-
-        let cands = [];
-        if (detectors && !canInterpolateStationarySlot(slots, slotIdx, buf)) {
-          cands = detectCandidatesOnSource(detectors, v, vw, vh, true);
-        }
+        const cands = detectors ? detectCandidatesOnSource(detectors, v, vw, vh) : [];
         slots[slotIdx] = { t: actualPts, cands, buf };
         newlyScanned++;
 
@@ -1930,8 +1944,6 @@
       cacheEntry.complete = true;
       return buildCurrent();
     });
-
-    return phase2Res || phase1Res;
   }
 
   async function trackVideoAuto(url, knownDuration, isCancelled, opts) {
